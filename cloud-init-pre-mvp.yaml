@@ -93,15 +93,15 @@ runcmd:
   # Create systemd unit to run Ansible playbook after networking
   - |
       cat <<'EOF' > /etc/systemd/system/ansible-provision.service
-[Unit]
-Description=Run Ansible provisioning for Stock‑Ticker MVP
-After=network-online.target
-Wants=network-online.target
-[Service]
-Type=oneshot
-User=root
-ExecStart=/usr/bin/ansible-playbook -i localhost, /home/pi/stock-ticker/ansible/provision.yml
-EOF
+      [Unit]
+      Description=Run Ansible provisioning for Stock‑Ticker MVP
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      User=root
+      ExecStart=/usr/bin/ansible-playbook -i localhost, /home/pi/stock-ticker/ansible/provision.yml
+      EOF
       systemctl daemon-reload
       systemctl enable ansible-provision.service
 
