@@ -16,7 +16,7 @@ A system that serves near-real-time stock ticker data to a standalone desktop wi
 - Display data in a locally-run web-based UI (server runs on the user's Windows/macOS machine), presented as a standalone desktop widget — no browser tab, no visible address bar, launched by double-clicking an app.
 - Runs identically on Windows and macOS with no platform-specific code paths (widget side); runs on Raspberry Pi OS / Debian ARM64 (server side).
 - Detect large ticker price moves and trigger an AWS Lambda that uses LangChain + Google News to source and summarize relevant news for that symbol.
-- Deliver the Lambda's news summary back to the Pi securely (outbound-only pull via SQS, without ever exposing the Pi's API to the public internet), and have the Pi's API serve those news summaries to the desktop widget UI via a dedicated `GET /alerts` polling endpoint.
+- Deliver the Lambda's news summary back to the Pi securely (outbound-only pull via SQS, without ever exposing the Pi's API to the public internet), and have the Pi's API serve those news summaries to the desktop widget UI via a dedicated GET /alerts polling endpoint.
 - Register the widget as a startup process on the user's machine (opt-in, toggleable), so it's running without the user needing to manually launch it after each login.
 
 ### Non-Goals (v1)
@@ -31,7 +31,7 @@ A system that serves near-real-time stock ticker data to a standalone desktop wi
 
 ## 3. Architecture
 
-```text
+text
 [Widget window, Mac/Windows] --HTTPS (LAN or Tailscale)--> [Raspberry Pi 4]
      (pywebview, packaged                                        |
       .exe/.app, holds an                              [Docker Compose stack]
@@ -55,9 +55,8 @@ A system that serves near-real-time stock ticker data to a standalone desktop wi
                                     [sqs-consumer, on-demand task in api container]
                                                     |
                                           write to Postgres (news/alert table)
-```
 
-Every arrow crossing the Pi/AWS boundary originates from the Pi — Lambda never initiates a connection to the Pi. This preserves §4.4's LAN-only posture even with a real AWS component now in the architecture (§4.9). Furthermore, the Pi only polls SQS **on demand when the Lambda is actually executed**, matched to that invocation's own `request_id` — plus a full drain on container startup and a low-frequency periodic backstop sweep (§4.9) — rather than running an infinite 24/7 polling loop. The loop closes back at the top: the widget polls the Pi's `GET /alerts` endpoint (§4.3) the same way it polls `GET /ticker/{symbol}`, which is how a news alert written to Postgres by the SQS consumer actually reaches the user — nothing here requires AWS to know the widget exists at all.
+Every arrow crossing the Pi/AWS boundary originates from the Pi — Lambda never initiates a connection to the Pi. This preserves §4.4's LAN-only posture even with a real AWS component now in the architecture (§4.9). Furthermore, the Pi only polls SQS **on demand when the Lambda is actually executed**, matched to that invocation's own request_id — plus a full drain on container startup and a low-frequency periodic backstop sweep (§4.9) — rather than running an infinite 24/7 polling loop. The loop closes back at the top: the widget polls the Pi's GET /alerts endpoint (§4.3) the same way it polls GET /ticker/{symbol}, which is how a news alert written to Postgres by the SQS consumer actually reaches the user — nothing here requires AWS to know the widget exists at all.
 
 **Components:**
 
@@ -67,7 +66,7 @@ Every arrow crossing the Pi/AWS boundary originates from the Pi — Lambda never
 4. Access control & networking — API key auth, LAN-only by default, optional Tailscale for remote access (§4.4)
 5. Persistent database + ORM — PostgreSQL (container, data volume on the NVMe drive) + SQLAlchemy
 6. Containerization — Docker Compose orchestrating the above (§4.6)
-7. Local web server on the widget side (Streamlit or Flask — unchanged in principle from before, now points at the Pi instead of a cloud endpoint), including polling both `/ticker` and `/alerts`
+7. Local web server on the widget side (Streamlit or Flask — unchanged in principle from before, now points at the Pi instead of a cloud endpoint), including polling both /ticker and /alerts
 8. Widget shell — native window wrapping the local server, packaged as a standalone app (§4.8)
 9. Price-move news alert — AWS Lambda (LangChain + Google News + cloud LLM) and SQS, invoked and consumed entirely from the Pi's side, with results served back out via the Pi's own API (§4.9)
 10. Local server & hardware host — Raspberry Pi 4 + NVMe operational hardening and reliability configurations (§4.10)
@@ -96,10 +95,10 @@ Every arrow crossing the Pi/AWS boundary originates from the Pi — Lambda never
 
 **Interface contract:**
 
-- `get(symbol) -> data | not_found`
-- `set(symbol, data, ttl_seconds) -> ack`
+- get(symbol) -> data | not_found
+- set(symbol, data, ttl_seconds) -> ack
 
-**Key schema:** `ticker:{SYMBOL}` — one key per symbol, storing the full normalized object.
+**Key schema:** ticker:{SYMBOL} — one key per symbol, storing the full normalized object.
 
 **TTL policy (this is a decision, not a constant):**
 
@@ -113,7 +112,7 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 
 **Why this still matters even without AWS billing:** the TTL policy's original purpose was twofold — avoid AWS cost, and stay under the provider's free-tier rate limit. The AWS half is gone now, but the provider rate limit is still real and still the actual constraint driving this table.
 
-**Deployment:** Redis runs as its own container in the Compose stack (§4.6) — a standard `redis:alpine` image, no external SaaS (Upstash), no DynamoDB workaround. This is simpler than the AWS version of this spec in every respect: no pay-per-request pricing to reason about, no free-tier ceiling to watch. Redis's own persistence (RDB/AOF) is unnecessary here — this is a cache, not the source of truth, and is fine to lose on container restart.
+**Deployment:** Redis runs as its own container in the Compose stack (§4.6) — a standard redis:alpine image, no external SaaS (Upstash), no DynamoDB workaround. This is simpler than the AWS version of this spec in every respect: no pay-per-request pricing to reason about, no free-tier ceiling to watch. Redis's own persistence (RDB/AOF) is unnecessary here — this is a cache, not the source of truth, and is fine to lose on container restart.
 
 ### 4.3 API Service (FastAPI + Uvicorn)
 
@@ -121,28 +120,28 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 
 **Logic:**
 
-1. FastAPI/Pydantic validates the symbol from the path parameter (`GET /ticker/{symbol}`). Malformed input is rejected (400) before touching cache or provider.
-2. Check the optional in-process cache (module-level dict with TTL) for a fresh entry. If present → return it (200), tag `source: cache` — no network call at all. This is genuinely more valuable now than it was on Lambda, since the API process stays warm indefinitely rather than only for the lifetime of a reused execution environment.
-3. Otherwise, query Redis for `ticker:{SYMBOL}`.
-4. If present and not expired → return it (200), tag `source: cache`, populate the in-process cache.
+1. FastAPI/Pydantic validates the symbol from the path parameter (GET /ticker/{symbol}). Malformed input is rejected (400) before touching cache or provider.
+2. Check the optional in-process cache (module-level dict with TTL) for a fresh entry. If present → return it (200), tag source: cache — no network call at all. This is genuinely more valuable now than it was on Lambda, since the API process stays warm indefinitely rather than only for the lifetime of a reused execution environment.
+3. Otherwise, query Redis for ticker:{SYMBOL}.
+4. If present and not expired → return it (200), tag source: cache, populate the in-process cache.
 5. If absent/expired → call the provider client.
-   - On success: write to Redis with the TTL from the current market-state policy, populate the in-process cache, write a record to the persistent history table (§4.7, off the response's critical path — a background task, not a blocking call), return fresh data (200), tag `source: live`.
-   - **Price-delta check (also off the critical path):** compare the newly-fetched price against the most recent history record for this symbol. If the absolute or percentage change exceeds a configured threshold, asynchronously invoke the price-move news Lambda (§4.9) — fire-and-forget from the response's perspective, so a slow LLM/news pipeline downstream never adds latency to a ticker request. Concurrently launch an in-process on-demand SQS polling task (§4.9), scoped to this invocation's own `request_id`, to await and ingest that specific invocation's alert without risk of consuming a different invocation's message.
-   - On provider failure: serve stale Redis data if available (tag `source: stale-fallback`), or return an error (502/503) if none exists. Deliberate choice, documented in code, not an accident of exception handling.
+   - On success: write to Redis with the TTL from the current market-state policy, populate the in-process cache, write a record to the persistent history table (§4.7, off the response's critical path — a background task, not a blocking call), return fresh data (200), tag source: live.
+   - **Price-delta check (also off the critical path):** compare the newly-fetched price against the most recent history record for this symbol. If the absolute or percentage change exceeds a configured threshold, asynchronously invoke the price-move news Lambda (§4.9) — fire-and-forget from the response's perspective, so a slow LLM/news pipeline downstream never adds latency to a ticker request. Concurrently launch an in-process on-demand SQS polling task (§4.9), scoped to this invocation's own request_id, to await and ingest that specific invocation's alert without risk of consuming a different invocation's message.
+   - On provider failure: serve stale Redis data if available (tag source: stale-fallback), or return an error (502/503) if none exists. Deliberate choice, documented in code, not an accident of exception handling.
 6. All responses share one JSON shape (§5) regardless of source.
 
-**`GET /alerts` — the route that actually delivers Lambda-sourced news back to the widget:**
+**GET /alerts — the route that actually delivers Lambda-sourced news back to the widget:**
 
-- Query params: `symbol` (optional — filter to one ticker), `since` (optional ISO 8601 timestamp — only alerts newer than this), `limit` (optional, default a modest number like 20, caps response size).
-- Reads directly from Postgres' `TickerNewsAlert` table (§5) — no Redis/provider involvement, since this is just serving data the SQS consumer (§4.9) already wrote there. Ordered by `timestamp` descending.
+- Query params: symbol (optional — filter to one ticker), since (optional ISO 8601 timestamp — only alerts newer than this), limit (optional, default a modest number like 20, caps response size).
+- Reads directly from Postgres' TickerNewsAlert table (§5) — no Redis/provider involvement, since this is just serving data the SQS consumer (§4.9) already wrote there. Ordered by timestamp descending.
 - Same API-key auth as every other route (§4.4) — no separate access-control mechanism needed for this endpoint.
-- Deliberately stateless from the API's side: there's no server-side "mark as read" concept. The widget tracks the newest `timestamp` it has already displayed and passes it back as `since` on the next poll — this keeps the API's contract simple (a pure filtered read) and avoids adding a mutation path and its own failure modes just to track read state.
+- Deliberately stateless from the API's side: there's no server-side "mark as read" concept. The widget tracks the newest timestamp it has already displayed and passes it back as since on the next poll — this keeps the API's contract simple (a pure filtered read) and avoids adding a mutation path and its own failure modes just to track read state.
 
 **Non-functional requirements:**
 
-- The process is long-running now (unlike Lambda), so in-process state is a legitimate first-class cache layer rather than a best-effort optimization riding on uncertain container reuse — though Redis remains the source of truth for correctness, since the API container can still restart (deploys, crashes, `docker compose restart`).
-- Run via `uvicorn` (optionally behind `gunicorn` with multiple Uvicorn workers if you want more than one process handling requests) — a Pi 4's 4 cores can comfortably run a couple of workers for a single-user app, though one worker is plenty at this traffic level.
-- **On-demand SQS polling:** Rather than maintaining a wasteful 24/7 background polling loop, the API process spawns a targeted, bounded background task (via FastAPI `BackgroundTasks` or `asyncio.create_task`) strictly when a Lambda invocation is dispatched (§4.9). This task long-polls SQS (`WaitTimeSeconds=20`) until a message matching its own `request_id` arrives or until a bounded timeout (e.g. 2–3 minutes); a non-matching message is released back to the queue immediately (`ChangeMessageVisibility=0`) rather than consumed, so one invocation's poller can never accidentally swallow another's alert. A FastAPI lifespan startup handler runs a full drain loop (not just one call) to process any backlog left on the queue while the container was offline, and a low-frequency periodic sweep (e.g. every 10–15 minutes) acts as a backstop for the narrow case where a message arrives after every poller watching for it has already timed out.
+- The process is long-running now (unlike Lambda), so in-process state is a legitimate first-class cache layer rather than a best-effort optimization riding on uncertain container reuse — though Redis remains the source of truth for correctness, since the API container can still restart (deploys, crashes, docker compose restart).
+- Run via uvicorn (optionally behind gunicorn with multiple Uvicorn workers if you want more than one process handling requests) — a Pi 4's 4 cores can comfortably run a couple of workers for a single-user app, though one worker is plenty at this traffic level.
+- **On-demand SQS polling:** Rather than maintaining a wasteful 24/7 background polling loop, the API process spawns a targeted, bounded background task (via FastAPI BackgroundTasks or asyncio.create_task) strictly when a Lambda invocation is dispatched (§4.9). This task long-polls SQS (WaitTimeSeconds=20) until a message matching its own request_id arrives or until a bounded timeout (e.g. 2–3 minutes); a non-matching message is released back to the queue immediately (ChangeMessageVisibility=0) rather than consumed, so one invocation's poller can never accidentally swallow another's alert. A FastAPI lifespan startup handler runs a full drain loop (not just one call) to process any backlog left on the queue while the container was offline, and a low-frequency periodic sweep (e.g. every 10–15 minutes) acts as a backstop for the narrow case where a message arrives after every poller watching for it has already timed out.
 
 ### 4.4 Access Control & Networking
 
@@ -150,8 +149,8 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 
 **Authentication: API key header.** Since there's no AWS IAM available in a self-hosted setup, the natural (and now primary, not just a "lighter alternative") mechanism is a shared-secret header checked by a FastAPI dependency on every route:
 
-- Generate a random, sufficiently long key once; store it as an environment variable passed into the `api` container (via the Compose file's `env_file`, not hardcoded).
-- The widget stores the same key in its local `.env` (§4.5) and sends it as a header on every request.
+- Generate a random, sufficiently long key once; store it as an environment variable passed into the api container (via the Compose file's env_file, not hardcoded).
+- The widget stores the same key in its local .env (§4.5) and sends it as a header on every request.
 - This is meaningfully simpler than the AWS SigV4 story from the cloud-hosted version of this spec — no credential chains, no SDK signing, just a string comparison — and it's an appropriate level of rigor for a service that's LAN-only by default in the first place.
 
 **Remote access (if you ever want the widget to reach the Pi from outside your home network):**
@@ -160,29 +159,29 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 - Tailscale also offers free HTTPS certificates for its private domains (MagicDNS + Let's Encrypt integration), which is worth using if you want encryption in transit even though it's already a private tunnel — cheap to set up, no reason to skip it.
 - Explicitly avoid router port-forwarding to the Pi as an alternative to Tailscale — it reintroduces public exposure for a service that was designed from the ground up to avoid it.
 
-**Resource limits (the Pi-native equivalent of Lambda's Reserved Concurrency):** set `mem_limit`/`cpus` constraints on the `api` and `postgres` services in the Compose file. There's no per-invocation billing risk to cap anymore, but a runaway container (e.g. a bug causing a request storm) could still starve the Pi's other containers of resources — a loose cap is cheap insurance.
+**Resource limits (the Pi-native equivalent of Lambda's Reserved Concurrency):** set mem_limit/cpus constraints on the api and postgres services in the Compose file. There's no per-invocation billing risk to cap anymore, but a runaway container (e.g. a bug causing a request storm) could still starve the Pi's other containers of resources — a loose cap is cheap insurance.
 
 ### 4.5 Local Web-Based UI (cross-platform: Windows + macOS)
 
-**Responsibility:** Serve a browser-accessible page, running as a local process on the user's machine, that polls the Pi's API endpoints on an interval and renders the result — both live ticker data (`GET /ticker/{symbol}`) and, now, news alerts (`GET /alerts`, §4.3).
+**Responsibility:** Serve a browser-accessible page, running as a local process on the user's machine, that polls the Pi's API endpoints on an interval and renders the result — both live ticker data (GET /ticker/{symbol}) and, now, news alerts (GET /alerts, §4.3).
 
 **Framework choice:** Streamlit or Flask, both cross-platform-safe by construction (browser-rendered, not an OS-native GUI toolkit).
 
 **Configuration:**
 
-- The widget's `.env` now holds the Pi's address (LAN IP/hostname, or Tailscale hostname if using remote access) and the API key from §4.4 — a flat string, considerably simpler than the AWS credential-chain question from the cloud-hosted version of this spec.
+- The widget's .env now holds the Pi's address (LAN IP/hostname, or Tailscale hostname if using remote access) and the API key from §4.4 — a flat string, considerably simpler than the AWS credential-chain question from the cloud-hosted version of this spec.
 - If the Pi's LAN IP can change (DHCP), prefer a stable hostname — either a static DHCP reservation on your router for the Pi, or Tailscale's MagicDNS name, so the widget's config doesn't break after a router reboot.
 
 **Requirements (ticker polling):**
 
 - Polling interval configurable, defaulting to something equal to or longer than the shortest cache TTL (§4.2).
 - On request failure: display the last successfully fetched value with a staleness indicator rather than a blank/error state, unless failures persist beyond a threshold.
-- Display the `source` field from the response for debugging.
+- Display the source field from the response for debugging.
 
 **Requirements (alerts polling — a separate, independent poll loop):**
 
-- Poll `GET /alerts?since={last_seen_timestamp}` on its own interval, decoupled from the ticker poll interval — alerts are inherently less frequent than price updates, so tying the two together would mean either polling alerts unnecessarily often or delaying ticker updates for no reason. A longer interval (e.g. 30–60s) is appropriate here.
-- Track the newest alert `timestamp` seen client-side (in the widget's own local state — no server-side "read" tracking, per §4.3) and pass it as `since` on each subsequent poll, so the Pi only ever returns genuinely new alerts.
+- Poll GET /alerts?since={last_seen_timestamp} on its own interval, decoupled from the ticker poll interval — alerts are inherently less frequent than price updates, so tying the two together would mean either polling alerts unnecessarily often or delaying ticker updates for no reason. A longer interval (e.g. 30–60s) is appropriate here.
+- Track the newest alert timestamp seen client-side (in the widget's own local state — no server-side "read" tracking, per §4.3) and pass it as since on each subsequent poll, so the Pi only ever returns genuinely new alerts.
 - Render new alerts in a dedicated panel/section of the widget's page (symbol, summary, timestamp, source links) — appended to what's already displayed, not replacing it, so a user briefly glancing away doesn't miss an alert that arrived and then scrolled off.
 - A failed alerts poll should fail silently from the user's perspective (log it, retry next interval) rather than surfacing an error state — missing a news update for one cycle is a minor, self-correcting problem, unlike a failed ticker poll where staleness genuinely matters more.
 
@@ -194,22 +193,22 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 
 | Service | Image | Notes |
 | --- | --- | --- |
-| `api` | Custom, built from a `Dockerfile` in the repo | FastAPI + Uvicorn (§4.3). Multi-arch build required — see §10. |
-| `redis` | Official `redis:alpine` | Cache layer (§4.2). No persistent volume needed — cache loss on restart is fine. |
-| `postgres` | Official `postgres:alpine` (or similar) | Persistent database (§4.7). Data directory bind-mounted to a path on the NVMe drive. |
+| api | Custom, built from a Dockerfile in the repo | FastAPI + Uvicorn (§4.3). Multi-arch build required — see §10. |
+| redis | Official redis:alpine | Cache layer (§4.2). No persistent volume needed — cache loss on restart is fine. |
+| postgres | Official postgres:alpine (or similar) | Persistent database (§4.7). Data directory bind-mounted to a path on the NVMe drive. |
 
 **NVMe storage for the database — the concrete requirement behind "save the database on the NVMe drive":**
 
-- Mount the NVMe drive at a fixed path on the Pi's filesystem (e.g. `/mnt/nvme`), and bind-mount a subdirectory of it into the `postgres` container as its data directory, rather than using a plain Docker named volume (which would default onto the Pi's boot SD card unless explicitly redirected). This is the actual mechanism that gets the database's bytes physically onto the NVMe drive rather than just conceptually "using" it.
+- Mount the NVMe drive at a fixed path on the Pi's filesystem (e.g. /mnt/nvme), and bind-mount a subdirectory of it into the postgres container as its data directory, rather than using a plain Docker named volume (which would default onto the Pi's boot SD card unless explicitly redirected). This is the actual mechanism that gets the database's bytes physically onto the NVMe drive rather than just conceptually "using" it.
 - Benefit beyond raw speed: keeping database I/O off the boot SD card materially reduces SD card wear, which matters for a Pi's typical long-term reliability — the original project note about being on a 32GB SD card, plus an NVMe addition specifically for the database, suggests this reliability concern is already part of the thinking here.
-- Set the NVMe mount to persist across reboots via the Pi's `/etc/fstab`, not just mounted ad hoc — otherwise a reboot could bring the Pi up with the database directory missing, which Postgres would treat as "first run" rather than "here's your existing data."
+- Set the NVMe mount to persist across reboots via the Pi's /etc/fstab, not just mounted ad hoc — otherwise a reboot could bring the Pi up with the database directory missing, which Postgres would treat as "first run" rather than "here's your existing data."
 
 **Cross-cutting container practices:**
 
-- `restart: unless-stopped` on every service — the Pi-native equivalent of Lambda automatically retrying; if a container crashes or the Pi reboots, Docker brings everything back without manual intervention.
-- Docker `healthcheck` directives on `api` and `postgres` — lets Docker (and `docker compose ps`) report real health status, and lets `restart: unless-stopped` actually detect and recover a hung-but-not-crashed container, not just a fully dead one.
-- `.env` file (git-ignored) for secrets (API key, DB credentials) referenced by the Compose file via `env_file:` — never baked into the images themselves.
-- Docker's log driver configured with explicit `max-size`/`max-file` limits (§12's logging note) so container logs don't silently fill the SD card/NVMe over months of uptime.
+- restart: unless-stopped on every service — the Pi-native equivalent of Lambda automatically retrying; if a container crashes or the Pi reboots, Docker brings everything back without manual intervention.
+- Docker healthcheck directives on api and postgres — lets Docker (and docker compose ps) report real health status, and lets restart: unless-stopped actually detect and recover a hung-but-not-crashed container, not just a fully dead one.
+- .env file (git-ignored) for secrets (API key, DB credentials) referenced by the Compose file via env_file: — never baked into the images themselves.
+- Docker's log driver configured with explicit max-size/max-file limits (§12's logging note) so container logs don't silently fill the SD card/NVMe over months of uptime.
 
 ### 4.7 Persistent Database & ORM
 
@@ -221,15 +220,15 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 
 **Lighter alternative: SQLite on the NVMe drive**, if Postgres feels like more moving parts than a single-user hobby app needs. SQLAlchemy supports both dialects with largely the same code, so this is a low-cost decision to defer or revisit — start with whichever feels right, the ORM layer insulates you from most of the switching cost later. SQLite's concurrent-write limitations are a non-issue here regardless of choice, since this is a single API process talking to its own database.
 
-**Data model:** the `TickerHistoryRecord` shape from §5, mapped to a SQLAlchemy model with `symbol` and `timestamp` as an indexed (and likely composite-unique) pair, mirroring the partition/sort-key design intent from the DynamoDB version of this spec, now expressed as a normal relational index.
+**Data model:** the TickerHistoryRecord shape from §5, mapped to a SQLAlchemy model with symbol and timestamp as an indexed (and likely composite-unique) pair, mirroring the partition/sort-key design intent from the DynamoDB version of this spec, now expressed as a normal relational index.
 
 ### 4.8 Widget Shell (standalone packaging)
 
 **Responsibility:** Turn the local web UI (§4.5) into a native-feeling desktop widget — unchanged in principle from the original design.
 
-**(a) Removing browser chrome:** `pywebview`, pointed at `http://127.0.0.1:{port}` (the widget's own local server, which in turn talks to the Pi). Widget-specific window properties: fixed small size, optional `on_top=True`, optional `frameless=True`.
+**(a) Removing browser chrome:** pywebview, pointed at <http://127.0.0.1:{port}> (the widget's own local server, which in turn talks to the Pi). Widget-specific window properties: fixed small size, optional on_top=True, optional frameless=True.
 
-**(b) Standalone executable:** PyInstaller, built separately per OS (no cross-compilation) — a `.exe` on Windows, a `.app` on macOS, "windowed"/"no console" mode. Bundle or prompt for the Pi's address and API key on first launch.
+**(b) Standalone executable:** PyInstaller, built separately per OS (no cross-compilation) — a .exe on Windows, a .app on macOS, "windowed"/"no console" mode. Bundle or prompt for the Pi's address and API key on first launch.
 
 **Requirements:**
 
@@ -243,14 +242,14 @@ This is inherently platform-specific (there's no cross-platform API for "run thi
 
 | Platform | Mechanism | Why this one |
 | --- | --- | --- |
-| Windows | A value in `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`, pointing at the packaged `.exe` | Per-user (`HKCU`), needs no admin rights, and is a single registry write/delete via Python's built-in `winreg` — no extra dependency, no `.lnk` shortcut file to construct. Shows up in Task Manager's Startup tab like any other startup entry, so the user can always see and disable it outside the app too. |
-| macOS | A `LaunchAgent` plist in `~/Library/LaunchAgents/`, loaded via `launchctl` | Per-user, no admin rights, the standard mechanism for a login item that isn't a full native `.app` bundle with Login Items integration. Avoids AppleScript/`osascript`-based approaches, which can trigger additional automation permission prompts on newer macOS. |
+| Windows | A value in HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run, pointing at the packaged .exe | Per-user (HKCU), needs no admin rights, and is a single registry write/delete via Python's built-in winreg — no extra dependency, no .lnk shortcut file to construct. Shows up in Task Manager's Startup tab like any other startup entry, so the user can always see and disable it outside the app too. |
+| macOS | A LaunchAgent plist in ~/Library/LaunchAgents/, loaded via launchctl | Per-user, no admin rights, the standard mechanism for a login item that isn't a full native .app bundle with Login Items integration. Avoids AppleScript/osascript-based approaches, which can trigger additional automation permission prompts on newer macOS. |
 
 **Behavior:**
 
 - Offer this as a choice on first launch (e.g. a checkbox: "Start automatically when I log in"), rather than silently registering it — the widget is already asking the user to trust it with an API key and Pi address on first run, and startup registration is a further step that deserves the same explicit consent rather than being bundled in as an assumed default.
 - Surface the same toggle inside the widget's own UI afterward (a small settings checkbox on the existing local page, §4.5 — no need for a system tray icon just for this single toggle) so the user can turn it on or off later without needing to know where the registry key or LaunchAgent plist lives.
-- Registering/unregistering is symmetric: the same code path that writes the `Run` key or installs+loads the LaunchAgent should also know how to remove/unload it, so toggling the setting off actually cleans up rather than leaving an orphaned entry pointing at a since-deleted or since-moved executable.
+- Registering/unregistering is symmetric: the same code path that writes the Run key or installs+loads the LaunchAgent should also know how to remove/unload it, so toggling the setting off actually cleans up rather than leaving an orphaned entry pointing at a since-deleted or since-moved executable.
 
 **Requirements (extending the list above):**
 
@@ -266,44 +265,44 @@ This is inherently platform-specific (there's no cross-platform API for "run thi
 
 **Direction 1 — Pi invokes the Lambda:**
 
-- Triggered by the price-delta check in §4.3. The Pi holds a narrowly-scoped IAM credential (an IAM user or role, same least-privilege posture used throughout this spec) granted **only** `lambda:InvokeFunction` on this specific function's ARN — nothing broader.
-- Invoke **asynchronously** (`InvocationType: Event`) rather than synchronously — the Pi's ticker-serving path must never block on Lambda/LangChain/LLM latency, which can easily run several seconds. The invocation payload carries the symbol, the price delta, and a timestamp; nothing else needs to cross this boundary.
+- Triggered by the price-delta check in §4.3. The Pi holds a narrowly-scoped IAM credential (an IAM user or role, same least-privilege posture used throughout this spec) granted **only** lambda:InvokeFunction on this specific function's ARN — nothing broader.
+- Invoke **asynchronously** (InvocationType: Event) rather than synchronously — the Pi's ticker-serving path must never block on Lambda/LangChain/LLM latency, which can easily run several seconds. The invocation payload carries the symbol, the price delta, and a timestamp; nothing else needs to cross this boundary.
 - This direction is a straightforward, well-worn pattern — outbound HTTPS from the Pi to a public AWS API endpoint, SigV4-signed. No different in kind from the credential handling already documented earlier in this spec for the cloud-hosted architecture.
 
 **Inside the Lambda:**
 
 - **LangChain** orchestrates the pipeline: a retriever/tool wrapping a news source, feeding results to a cloud-hosted LLM (per the project's existing preference for a cloud LLM over a locally-run model) to produce a concise summary of why the symbol might be moving.
-- **Google News backend, free option:** Google News doesn't have an official free API. The practical, no-API-key approach is Google News' public RSS search feed (`news.google.com/rss/search?q={symbol}`), which is freely parseable and fits this project's cost-conscious pattern. A paid provider (e.g. SerpApi's Google News endpoint) exists if you want more structured/reliable results later, but isn't necessary for v1 and isn't free — flagged here explicitly rather than assumed.
+- **Google News backend, free option:** Google News doesn't have an official free API. The practical, no-API-key approach is Google News' public RSS search feed (news.google.com/rss/search?q={symbol}), which is freely parseable and fits this project's cost-conscious pattern. A paid provider (e.g. SerpApi's Google News endpoint) exists if you want more structured/reliable results later, but isn't necessary for v1 and isn't free — flagged here explicitly rather than assumed.
 - **The LLM call is the one genuinely non-free piece of this entire spec.** Unlike every other AWS service used so far (Lambda, SQS, DynamoDB, S3 at hobby scale), cloud LLM APIs don't have an indefinite free tier at any real usage. Be upfront about this rather than folding it into the "$0" framing that's applied everywhere else — pick a provider with a usable free/low-cost tier for hobby-scale usage, and treat this line item as the one real recurring cost in the whole system.
-- The LLM API key is a secret the Lambda needs at runtime. Store it in **SSM Parameter Store as a `SecureString`** (not Secrets Manager — Parameter Store's standard tier is free, Secrets Manager bills per secret per month), referenced by the Lambda's environment configuration and decrypted at cold start. The Lambda's execution role needs least-privilege `ssm:GetParameter` on that one parameter's ARN, plus `kms:Decrypt` on the key used to encrypt it if a customer-managed KMS key is used (the AWS-managed default key also works and needs no extra IAM grant).
+- The LLM API key is a secret the Lambda needs at runtime. Store it in **SSM Parameter Store as a SecureString** (not Secrets Manager — Parameter Store's standard tier is free, Secrets Manager bills per secret per month), referenced by the Lambda's environment configuration and decrypted at cold start. The Lambda's execution role needs least-privilege ssm:GetParameter on that one parameter's ARN, plus kms:Decrypt on the key used to encrypt it if a customer-managed KMS key is used (the AWS-managed default key also works and needs no extra IAM grant).
 
 **Direction 2 — Lambda's result reaches the Pi via SQS, not a direct call back:**
 
-- The Lambda writes its result (symbol, summary, source article links, timestamp) as a message to a dedicated **SQS standard queue**. The Lambda's execution role needs least-privilege `sqs:SendMessage` on that one queue's ARN.
-- **On-demand polling (only when Lambda is executed):** The Pi's `api` container runs a pull-based consumer (§4.3), but **polls SQS strictly on demand rather than as a 24/7 continuous daemon**:
-  - **Trigger:** When the Pi invokes the Lambda asynchronously, it generates a unique `request_id` (UUID) in the payload and immediately launches an ephemeral in-process polling task dedicated to retrieving the alert.
-  - **Long-polling:** The task calls `ReceiveMessage` with `WaitTimeSeconds=20` (max long-poll). Because the Lambda typically finishes in 5–15 seconds, the message is almost always collected on the very first or second poll.
-  - **Request-ID matching (closes a message-orphaning gap):** because this is a standard, non-FIFO queue, a poller can receive *any* message currently on the queue — not necessarily the one from the invocation that spawned it. A poller must check the received message's `request_id` against the one it's actually waiting for:
-    - **Match:** validate, upsert into Postgres, call `DeleteMessage`, and cleanly terminate — same as before.
-    - **No match:** immediately call `ChangeMessageVisibility` with `VisibilityTimeout=0` so the message becomes visible to other pollers again right away (rather than holding it hostage for the remainder of its default visibility timeout, or — worse — deleting someone else's alert). The poller then continues its own long-poll loop within its own bounded timeout, still waiting for its own `request_id`.
-    - This matters because the earlier version of this design had every poller process-and-delete whatever it received, regardless of which invocation it belonged to. In practice this mostly self-healed, but it had a real failure mode: if a fast poller grabbed a slow invocation's *eventual* message before that invocation's own poller had a chance to, and every currently-running poller happened to exit (successfully, on a different message) before the slow one's message arrived, that message could end up with zero active listeners — sitting in the queue with no automatic recovery until an unrelated future invocation happened to sweep it up, or the container restarted. Matching by `request_id` and releasing non-matches back to the queue immediately (rather than consuming them) prevents a poller from ever "stealing" another invocation's message in the first place.
+- The Lambda writes its result (symbol, summary, source article links, timestamp) as a message to a dedicated **SQS standard queue**. The Lambda's execution role needs least-privilege sqs:SendMessage on that one queue's ARN.
+- **On-demand polling (only when Lambda is executed):** The Pi's api container runs a pull-based consumer (§4.3), but **polls SQS strictly on demand rather than as a 24/7 continuous daemon**:
+  - **Trigger:** When the Pi invokes the Lambda asynchronously, it generates a unique request_id (UUID) in the payload and immediately launches an ephemeral in-process polling task dedicated to retrieving the alert.
+  - **Long-polling:** The task calls ReceiveMessage with WaitTimeSeconds=20 (max long-poll). Because the Lambda typically finishes in 5–15 seconds, the message is almost always collected on the very first or second poll.
+  - **Request-ID matching (closes a message-orphaning gap):** because this is a standard, non-FIFO queue, a poller can receive *any* message currently on the queue — not necessarily the one from the invocation that spawned it. A poller must check the received message's request_id against the one it's actually waiting for:
+    - **Match:** validate, upsert into Postgres, call DeleteMessage, and cleanly terminate — same as before.
+    - **No match:** immediately call ChangeMessageVisibility with VisibilityTimeout=0 so the message becomes visible to other pollers again right away (rather than holding it hostage for the remainder of its default visibility timeout, or — worse — deleting someone else's alert). The poller then continues its own long-poll loop within its own bounded timeout, still waiting for its own request_id.
+    - This matters because the earlier version of this design had every poller process-and-delete whatever it received, regardless of which invocation it belonged to. In practice this mostly self-healed, but it had a real failure mode: if a fast poller grabbed a slow invocation's *eventual* message before that invocation's own poller had a chance to, and every currently-running poller happened to exit (successfully, on a different message) before the slow one's message arrived, that message could end up with zero active listeners — sitting in the queue with no automatic recovery until an unrelated future invocation happened to sweep it up, or the container restarted. Matching by request_id and releasing non-matches back to the queue immediately (rather than consuming them) prevents a poller from ever "stealing" another invocation's message in the first place.
   - **Bounded Timeout:** If the Lambda errors or times out before publishing to SQS, the poller times out after a bounded limit (e.g., 2–3 minutes / ~6–9 long polls), logs a failure warning, and exits. It never hangs or polls in an infinite loop.
-  - **Startup Recovery Drain:** On API container startup (via FastAPI lifespan event), a long-poll drain loop runs — repeatedly calling `ReceiveMessage` until the queue reports empty (or a sane cap on iterations is hit), not just a single call — to catch any messages that accumulated while the Pi or container was offline, including possibly more than one.
-  - **Periodic backstop sweep (the second half of closing the gap):** even with request-ID matching, a message can still end up orphaned in one narrow case — every poller that was watching for it happens to time out and exit *just before* it arrives (e.g. an unusually slow LLM response outlasting the 2–3 minute window). Request-ID matching prevents another poller from mistakenly consuming it, but nothing else is left watching for it either. A lightweight sweep — a single bounded `ReceiveMessage` drain, run on a low-frequency schedule (e.g. every 10–15 minutes, independent of whether any invocation is currently in flight) — catches this residual case. This is not a return to the old 24/7 20-second loop: at a 15-minute interval this adds roughly 2,900 requests/month, still a small fraction of SQS's free tier, and still overwhelmingly cheaper than continuous long-polling, while closing the last gap the on-demand design otherwise leaves open.
+  - **Startup Recovery Drain:** On API container startup (via FastAPI lifespan event), a long-poll drain loop runs — repeatedly calling ReceiveMessage until the queue reports empty (or a sane cap on iterations is hit), not just a single call — to catch any messages that accumulated while the Pi or container was offline, including possibly more than one.
+  - **Periodic backstop sweep (the second half of closing the gap):** even with request-ID matching, a message can still end up orphaned in one narrow case — every poller that was watching for it happens to time out and exit *just before* it arrives (e.g. an unusually slow LLM response outlasting the 2–3 minute window). Request-ID matching prevents another poller from mistakenly consuming it, but nothing else is left watching for it either. A lightweight sweep — a single bounded ReceiveMessage drain, run on a low-frequency schedule (e.g. every 10–15 minutes, independent of whether any invocation is currently in flight) — catches this residual case. This is not a return to the old 24/7 20-second loop: at a 15-minute interval this adds roughly 2,900 requests/month, still a small fraction of SQS's free tier, and still overwhelmingly cheaper than continuous long-polling, while closing the last gap the on-demand design otherwise leaves open.
   - **Zero waste (revised):** on-demand invocation-triggered polling plus a periodic backstop sweep together still eliminate the vast majority of the ~130,000 empty polling calls/month a continuous loop would generate — the exact monthly total now depends on invocation volume plus the sweep's fixed cadence, but stays comfortably within SQS's free tier at any realistic hobby usage, while no longer leaving a silent-failure window.
-- The Pi's consumer credential needs least-privilege `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility`, and `sqs:GetQueueUrl` on that one queue's ARN — a second narrow grant alongside the `lambda:InvokeFunction` grant from Direction 1, not a combined broad policy.
+- The Pi's consumer credential needs least-privilege sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility, and sqs:GetQueueUrl on that one queue's ARN — a second narrow grant alongside the lambda:InvokeFunction grant from Direction 1, not a combined broad policy.
 - **Idempotency:** SQS is at-least-once delivery, so the Pi's consumer must handle a duplicate message safely — upsert keyed by a Lambda-generated request ID (included in the message body) rather than a blind insert, so a redelivered message doesn't create a duplicate news-alert row.
 - **Dead-letter queue:** configure a redrive policy sending messages to a DLQ after a small number of failed receive attempts (e.g. 3–5). Worth being precise about what this does and doesn't catch: it triggers on a message being *received* repeatedly without being deleted, not on a message that's simply never received at all — so the DLQ is a safety net for a message that's actively being mishandled, while the periodic sweep above is what catches a message nobody has looked at yet. The two mechanisms are complementary, not redundant.
 - Message retention on the queue should comfortably exceed the Pi's expected worst-case downtime (a few days is reasonable for a personal device) so a Pi outage doesn't lose alerts outright, just delays them.
 
-**Data model:** a `TickerNewsAlert` shape, persisted to Postgres by the consumer — see the addition in §5. This table is the entire handoff point to the rest of the system: the widget never talks to Lambda, SQS, or AWS at all — it only ever sees this data via the Pi's own `GET /alerts` endpoint (§4.3), which is what actually gets the news in front of the user.
+**Data model:** a TickerNewsAlert shape, persisted to Postgres by the consumer — see the addition in §5. This table is the entire handoff point to the rest of the system: the widget never talks to Lambda, SQS, or AWS at all — it only ever sees this data via the Pi's own GET /alerts endpoint (§4.3), which is what actually gets the news in front of the user.
 
 **Architectural Decision: Why SQS vs. Direct Synchronous Invocation:**
 
 - **The Inbound Problem:** The Pi is behind a home NAT router without port forwarding. Lambda in AWS cannot call the Pi directly. SQS allows the Pi to initiate an **outbound-only** connection to retrieve messages, preserving the LAN-only posture.
 - **Downtime Buffering:** If the Pi reboots, loses home Wi-Fi, or experiences a power outage while the Lambda is executing, SQS safely buffers the alert message for days. Direct synchronous invocation without a queue would lose the alert if the network drops during the 15-second LLM execution.
 - **Latency Isolation:** LLM summarization takes 5–20s. Asynchronous dispatch + SQS decouples this delay so the Pi returns ticker data to the user immediately.
-- **Alternative (Direct Synchronous Background Task):** If a user explicitly wants to eliminate AWS SQS and Terraform queue resources entirely, the Pi could invoke the Lambda synchronously in an in-process background thread (`InvocationType: RequestResponse`) and receive the payload directly in the return body. This simplifies cloud infrastructure at the cost of losing alerts if the local network drops during execution.
+- **Alternative (Direct Synchronous Background Task):** If a user explicitly wants to eliminate AWS SQS and Terraform queue resources entirely, the Pi could invoke the Lambda synchronously in an in-process background thread (InvocationType: RequestResponse) and receive the payload directly in the return body. This simplifies cloud infrastructure at the cost of losing alerts if the local network drops during execution.
 
 ### 4.10 Local Server & Hardware Operations (Raspberry Pi 4 + NVMe)
 
@@ -313,81 +312,90 @@ This is inherently platform-specific (there's no cross-platform API for "run thi
 
 - **Dedicated 15W Supply:** The Raspberry Pi 4 with an attached NVMe SSD (over USB 3.0 or PCIe HAT) requires substantial peak power. Generic phone chargers cause subtle voltage sags that result in silent CPU throttling and transient USB/NVMe disconnects.
 - **Requirement:** Must use the official Raspberry Pi 15.3W USB-C Power Supply (5.1V / 3.0A).
-- **Diagnostics:** Periodically monitor for under-voltage flags using `vcgencmd get_throttled` (a value of `0x0` indicates healthy power delivery; bit 0 indicates under-voltage detected).
-- **Power Cut Protection:** Enable PostgreSQL `fsync=on` (default) to ensure write-ahead log (WAL) integrity on sudden power loss. For high availability, connect the Pi and home router to an inexpensive mini 5V/12V DC-UPS.
+- **Diagnostics:** Periodically monitor for under-voltage flags using vcgencmd get_throttled (a value of 0x0 indicates healthy power delivery; bit 0 indicates under-voltage detected).
+- **Power Cut Protection:** Enable PostgreSQL fsync=on (default) to ensure write-ahead log (WAL) integrity on sudden power loss. For high availability, connect the Pi and home router to an inexpensive mini 5V/12V DC-UPS.
 
 #### 2. Thermal Management & Cooling
 
 - Under sustained Docker container loads and database maintenance, an uncooled Pi 4 quickly exceeds 80°C, triggering thermal throttling down to 1.0 GHz or 750 MHz.
-- **Requirement:** Active fan cooling or a high-mass passive aluminum heatsink case (e.g. Argon ONE, FLIRC, or an Ice Tower) maintaining CPU thermals below 65°C under load (`vcgencmd measure_temp`).
+- **Requirement:** Active fan cooling or a high-mass passive aluminum heatsink case (e.g. Argon ONE, FLIRC, or an Ice Tower) maintaining CPU thermals below 65°C under load (vcgencmd measure_temp).
 
 #### 3. Storage Architecture: Ditching the SD Card (Direct NVMe Boot)
 
 - **Problem:** MicroSD cards degrade rapidly under continuous Docker container layer churn, swap operations, and system logging, leading to silent filesystem corruption.
-- **Architecture Decision:** Update the Pi 4 EEPROM bootloader to **boot directly from the NVMe SSD over USB3** (`BOOT_ORDER=0xf41`). Remove the microSD card entirely.
+- **Architecture Decision:** Update the Pi 4 EEPROM bootloader to **boot directly from the NVMe SSD over USB3** (BOOT_ORDER=0xf41). Remove the microSD card entirely.
   - Increases disk I/O throughput from ~30 MB/s (Class 10 SD) to ~350+ MB/s (USB 3.0 UASP NVMe).
-  - Hosts both the root OS filesystem and the Docker storage driver (`/var/lib/docker`) on enterprise-grade NAND flash.
-- **SSD Health & TRIM:** Verify USB adapter supports UASP and TRIM (`lsblk --discard`). Enable a weekly cron job (`sudo fstrim -av`) to prevent write performance degradation over time.
+  - Hosts both the root OS filesystem and the Docker storage driver (/var/lib/docker) on enterprise-grade NAND flash.
+- **SSD Health & TRIM:** Verify USB adapter supports UASP and TRIM (lsblk --discard). Enable a weekly cron job (sudo fstrim -av) to prevent write performance degradation over time.
 
 #### 4. Local Networking & IP Stability
 
 - **Static DHCP Reservation:** Home routers assign dynamic IP addresses via DHCP that change on router reboot or lease expiry, which would break the desktop widget's target address.
-  - Configure a **Static DHCP Reservation** in the home router mapping the Pi’s MAC address to a fixed local IP (e.g. `192.168.1.150`), OR
-  - Rely exclusively on Tailscale MagicDNS (`http://raspberrypi.tailnet.ts.net:8000`), which remains stable across physical networks.
+  - Configure a **Static DHCP Reservation** in the home router mapping the Pi’s MAC address to a fixed local IP (e.g. 192.168.1.150), OR
+  - Rely exclusively on Tailscale MagicDNS (<http://raspberrypi.tailnet.ts.net:8000>), which remains stable across physical networks.
 - **Wired Ethernet Preferred:** Connect the Pi to the local router via Gigabit Ethernet rather than Wi-Fi to eliminate packet jitter, sleep-mode disconnects, and multicast DNS bridge issues across 2.4GHz/5GHz bands.
 
 #### 5. System Clock & NTP (The "RTC" Limitation)
 
 - **The Gotcha:** Raspberry Pi boards lack an onboard battery-backed Real-Time Clock (RTC). If powered on without immediate internet, the system clock can reset to 1970 or the last shutdown timestamp.
-- **Impact on Cloud Calls:** AWS SigV4 request signatures and HTTPS TLS certificates strictly reject requests if the client clock skew exceeds 5 minutes (`RequestTimeTooSkewed`).
-- **Mitigation:** Ensure `systemd-timesyncd` or `chrony` is enabled to synchronize time immediately via NTP upon network link acquisition prior to launching Docker containers.
+- **Impact on Cloud Calls:** AWS SigV4 request signatures and HTTPS TLS certificates strictly reject requests if the client clock skew exceeds 5 minutes (RequestTimeTooSkewed).
+- **Mitigation:** Ensure systemd-timesyncd or chrony is enabled to synchronize time immediately via NTP upon network link acquisition prior to launching Docker containers.
 
 #### 6. Local Host Security & Secrets Hygiene
 
-- **Firewall (`ufw`):** Enable local firewall on the Pi allowing only incoming port 22 (SSH) and port 8000 (FastAPI API) from the local subnet CIDR (e.g., `192.168.1.0/24`) and Tailscale interface (`tailscale0`).
-- **SSH Hardening:** Disable password authentication in `/etc/ssh/sshd_config` (`PasswordAuthentication no`); enforce public key authentication only.
-- **Host Secrets:** The `.env` file storing market provider keys, database credentials, and AWS access keys must have strict file permissions: `chmod 600 .env` (readable and writable only by the host deployment user).
+- **Firewall (ufw):** Enable local firewall on the Pi allowing only incoming port 22 (SSH) and port 8000 (FastAPI API) from the local subnet CIDR (e.g., 192.168.1.0/24) and Tailscale interface (tailscale0).
+- **SSH Hardening:** Disable password authentication in /etc/ssh/sshd_config (PasswordAuthentication no); enforce public key authentication only.
+- **Host Secrets:** The .env file storing market provider keys, database credentials, and AWS access keys must have strict file permissions: chmod 600 .env (readable and writable only by the host deployment user).
 
 #### 7. Disaster Recovery & Rapid Rebuild Plan
 
 - **Database Dump Cron:** A daily cron job executes a compressed dump of the Postgres historical database:
 
-  ```bash
+  bash
   docker exec stock-postgres pg_dump -U stockuser stockdata | gzip > /mnt/nvme/backups/db_$(date +%F).sql.gz
-  ```
-
+  
 - **Off-Host Backup:** Periodically sync the backup directory to a secondary USB drive or an S3 bucket.
-- **10-Minute Rebuild:** Because the Compose file, Dockerfile, and Alembic migrations are version-controlled in Git, restoring to a replacement Pi requires only flashing a fresh Raspberry Pi OS image, cloning the repo, restoring `.env` and `db.sql.gz`, and running `docker compose up -d`.
+- **10-Minute Rebuild:** Because the Compose file, Dockerfile, and Alembic migrations are version-controlled in Git, restoring to a replacement Pi requires only flashing a fresh Raspberry Pi OS image, cloning the repo, restoring .env and db.sql.gz, and running docker compose up -d.
+
+### 4.11 Kubernetes Deployment (Helm Chart)
+
+**Responsibility:** Deploy the service to a Kubernetes cluster using Helm, enabling multi-node scaling, easy upgrades, and unified configuration.
+
+- **Helm Chart (charts/stock-ticker):** Templates for Deployment, Service, ConfigMap, Secret, PersistentVolumeClaim for NVMe storage.
+- **CI/CD Integration:** Extend GitHub Actions to lint (helm lint), package, and push chart to an OCI registry or GitHub Pages.
+- **Multi‑arch Image:** Build and push linux/amd64,linux/arm64 API image used by the Helm chart.
+- **Automated Deploy Job:** helm upgrade --install on main merges targeting a K3s cluster (Raspberry Pi) or cloud dev cluster.
+- **Rollback & Health‑checks:** Use Helm rollback on failure; add postUpgrade hook to verify pod readiness.
+- **Observability Add‑on:** Deploy Prometheus‑node‑exporter and Grafana via sub‑charts.
+- **Testing:** KinD integration test that installs chart and runs API smoke tests.
 
 ## 5. Data Model
 
 **Response/cache shape:**
 
-```text
+text
 symbol: string
 price: number
 timestamp: string (ISO 8601, when this price was captured)
 source: enum [cache, live, stale-fallback]
 change: number (optional)
 change_percent: number (optional)
-```
 
 **Persistent history shape** (§4.7), mapped via SQLAlchemy:
 
-```text
+text
 id: integer (primary key)
 symbol: string (indexed)
 timestamp: datetime (indexed; composite index with symbol for range queries)
 price: number
 change: number (optional)
 change_percent: number (optional)
-```
 
 Deliberately a separate shape from the response object — the history record's purpose (a permanent, queryable log) differs from the response shape's purpose (a transient point-in-time value).
 
 **Ticker news alert shape** (§4.9), written by the Pi's SQS consumer, sourced from the Lambda's output:
 
-```text
+text
 id: integer (primary key)
 request_id: string (unique — Lambda-generated, used for idempotent upsert)
 symbol: string (indexed)
@@ -395,7 +403,6 @@ price_delta_percent: number
 summary: string (LLM-generated)
 source_links: array of strings
 timestamp: datetime
-```
 
 ## 6. Error Handling Summary
 
@@ -403,18 +410,18 @@ timestamp: datetime
 | --- | --- |
 | Invalid/unknown symbol | 400, no cache/provider call |
 | Provider timeout/error, no cache available | 502/503 with clear error body |
-| Provider timeout/error, stale cache available | Return stale data, tagged `stale-fallback` |
+| Provider timeout/error, stale cache available | Return stale data, tagged stale-fallback |
 | Redis unreachable | Fall back to direct provider call (degrade, don't fail outright) |
 | Postgres unreachable | History write fails silently (logged, non-blocking) — live ticker responses continue to work off Redis/provider alone |
 | History table write failure | Log and continue — never fail or delay the response for a write that's off the critical path |
-| API container crashed/restarting | `restart: unless-stopped` recovers it automatically; widget shows staleness indicator in the meantime |
+| API container crashed/restarting | restart: unless-stopped recovers it automatically; widget shows staleness indicator in the meantime |
 | Lambda invocation fails (throttled, error) | Logged on the Pi side; price-move alert is missed; on-demand SQS task does not spawn — never blocks or delays ticker response (§4.3) |
 | Pi offline when Lambda writes to SQS | Message sits in the queue (retention covers multi-day outages); startup recovery drain loop fetches and persists all backlogged messages on container boot (§4.9) |
-| Duplicate SQS delivery | Consumer upserts by `request_id` — never creates a duplicate alert row (§4.9) |
-| Poller receives a message for a different invocation | Visibility immediately reset (`ChangeMessageVisibility=0`) rather than deleted — released back to the queue for the correct poller (or the periodic sweep) to pick up (§4.9) |
+| Duplicate SQS delivery | Consumer upserts by request_id — never creates a duplicate alert row (§4.9) |
+| Poller receives a message for a different invocation | Visibility immediately reset (ChangeMessageVisibility=0) rather than deleted — released back to the queue for the correct poller (or the periodic sweep) to pick up (§4.9) |
 | Message arrives after every poller watching for it has already timed out | Caught by the periodic backstop sweep (every 10–15 min) rather than left orphaned indefinitely (§4.9) |
 | Google News/LLM call fails inside Lambda | Lambda logs failure and exits without writing to SQS; Pi's on-demand poller times out cleanly after bounded window (2–3 mins) and terminates |
-| `GET /alerts` request fails (widget-side) | Fail silently, retry on next poll interval — never surface an error state for a missed alert cycle (§4.5) |
+| GET /alerts request fails (widget-side) | Fail silently, retry on next poll interval — never surface an error state for a missed alert cycle (§4.5) |
 | UI request failure | Show last-known value + staleness indicator |
 
 ## 7. Cost Constraints (design implications)
@@ -440,9 +447,9 @@ timestamp: datetime
 - [ ] A malformed symbol is rejected by FastAPI/Pydantic validation with a 400.
 - [ ] Every live fetch writes a corresponding record to Postgres, without delaying or failing the response if that write fails.
 - [ ] History records are queryable by symbol, ordered by timestamp, using the indexed columns (no full-table scan).
-- [ ] `docker compose up` from a clean checkout brings up all three services (api, redis, postgres) successfully.
-- [ ] The Postgres data directory is confirmed to live on the NVMe mount, not the boot SD card, after a fresh `docker compose up`.
-- [ ] Killing the `api` container causes Docker to restart it automatically within a reasonable interval, with no manual intervention.
+- [ ] docker compose up from a clean checkout brings up all three services (api, redis, postgres) successfully.
+- [ ] The Postgres data directory is confirmed to live on the NVMe mount, not the boot SD card, after a fresh docker compose up.
+- [ ] Killing the api container causes Docker to restart it automatically within a reasonable interval, with no manual intervention.
 - [ ] A request without the correct API key header is rejected (401/403) before touching cache, provider, or database.
 - [ ] The API's port is confirmed unreachable from outside the home network (no router port-forward in place).
 - [ ] UI displays last-known value on a failed poll rather than going blank.
@@ -453,19 +460,19 @@ timestamp: datetime
 - [ ] A price move below the threshold does not trigger a Lambda invocation.
 - [ ] The Lambda successfully retrieves news for a test symbol via the Google News RSS feed and produces an LLM-generated summary.
 - [ ] The Lambda's result appears in Postgres via the Pi's on-demand SQS consumer task within a reasonable delay, with no inbound connection ever required to the Pi.
-- [ ] The Pi performs zero SQS `ReceiveMessage` calls during steady-state idle operation, initiating polling strictly upon triggering a Lambda invocation.
-- [ ] If a Lambda invocation produces a message while the Pi's `api` container is stopped, restarting the container causes the startup recovery drain to ingest the alert into Postgres — including when more than one message accumulated during the downtime.
-- [ ] Simulated concurrent invocations: when a poller receives a message whose `request_id` doesn't match its own, it releases the message back to the queue (visibility reset, not deleted) rather than consuming it — confirmed the "wrong" poller neither ingests nor discards another invocation's alert.
+- [ ] The Pi performs zero SQS ReceiveMessage calls during steady-state idle operation, initiating polling strictly upon triggering a Lambda invocation.
+- [ ] If a Lambda invocation produces a message while the Pi's api container is stopped, restarting the container causes the startup recovery drain to ingest the alert into Postgres — including when more than one message accumulated during the downtime.
+- [ ] Simulated concurrent invocations: when a poller receives a message whose request_id doesn't match its own, it releases the message back to the queue (visibility reset, not deleted) rather than consuming it — confirmed the "wrong" poller neither ingests nor discards another invocation's alert.
 - [ ] A message that arrives after every poller watching for it has already timed out is still eventually ingested, via the periodic backstop sweep, without requiring a container restart.
 - [ ] A duplicate SQS delivery (simulated by not deleting a message after processing) does not create a duplicate alert row.
-- [ ] The Pi's IAM credential is confirmed to have only the two narrow grants described in §4.9 (`lambda:InvokeFunction` on one ARN, `sqs:Receive/Delete/GetQueueUrl` on one ARN) — no broader AWS permissions.
-- [ ] After a news alert lands in Postgres (via the SQS consumer), the widget's next `GET /alerts` poll retrieves it and displays it without requiring a restart or manual refresh.
-- [ ] Calling `GET /alerts?since={timestamp}` returns only alerts newer than that timestamp — confirmed with a mix of older and newer test records.
-- [ ] A `GET /alerts` call with no matching new alerts returns an empty result cleanly, not an error.
-- [ ] End-to-end: a simulated large price move results in a news alert visibly appearing in the widget, with no manual intervention anywhere in the pipeline (price detection → Lambda → SQS → Postgres → `/alerts` → widget).
+- [ ] The Pi's IAM credential is confirmed to have only the two narrow grants described in §4.9 (lambda:InvokeFunction on one ARN, sqs:Receive/Delete/GetQueueUrl on one ARN) — no broader AWS permissions.
+- [ ] After a news alert lands in Postgres (via the SQS consumer), the widget's next GET /alerts poll retrieves it and displays it without requiring a restart or manual refresh.
+- [ ] Calling GET /alerts?since={timestamp} returns only alerts newer than that timestamp — confirmed with a mix of older and newer test records.
+- [ ] A GET /alerts call with no matching new alerts returns an empty result cleanly, not an error.
+- [ ] End-to-end: a simulated large price move results in a news alert visibly appearing in the widget, with no manual intervention anywhere in the pipeline (price detection → Lambda → SQS → Postgres → /alerts → widget).
 - [ ] On first launch, the user is prompted to enable start-at-login; choosing yes creates a real, working startup entry on both Windows and macOS.
 - [ ] With start-at-login enabled, a full OS logout/login (or reboot) results in the widget launching automatically with no manual action.
-- [ ] Toggling start-at-login off via the widget's own settings removes the startup entry, confirmed via Task Manager's Startup tab (Windows) or `~/Library/LaunchAgents` (macOS) — no orphaned entry remains.
+- [ ] Toggling start-at-login off via the widget's own settings removes the startup entry, confirmed via Task Manager's Startup tab (Windows) or ~/Library/LaunchAgents (macOS) — no orphaned entry remains.
 
 ## 9. Testing Strategy
 
@@ -489,27 +496,27 @@ A multi-tiered testing strategy ensures each component can be verified quickly a
 #### 1. Unit Testing (Isolated, Fast, Zero Cloud/Provider Cost)
 
 - **Provider API Client (§4.1):**
-  - Mock outbound HTTP responses using `respx` or `aioresponses`.
+  - Mock outbound HTTP responses using respx or aioresponses.
   - Verify payload parsing and normalization into the internal data model (§5).
   - Verify distinct exception mapping: invalid symbol (400/404), provider rate limits (429), server errors (500/503), and HTTP timeouts (5s threshold).
 
 - **Cache Layer Logic (§4.2):**
-  - Simulated in-memory Redis via `fakeredis`.
+  - Simulated in-memory Redis via fakeredis.
   - Validate market-hours TTL calculation: open (15–60s), closed (several hours), pre/post-market (60–120s).
-  - Validate cache key formation (`ticker:{SYMBOL}`) and TTL assignment.
+  - Validate cache key formation (ticker:{SYMBOL}) and TTL assignment.
 - **API Service & Routing (§4.3):**
-  - Tested using Starlette/HTTPX `TestClient`.
-  - **Authentication:** Verify requests without or with invalid `X-API-Key` headers return 401/403 before touching cache or provider.
+  - Tested using Starlette/HTTPX TestClient.
+  - **Authentication:** Verify requests without or with invalid X-API-Key headers return 401/403 before touching cache or provider.
   - **Input Validation:** Verify malformed symbols (numbers, excessive length, special chars) are rejected with 400.
-  - **Cache-Fetch Logic:** Verify cache hit returns 200 with `source: cache`; cache miss calls provider, updates cache, and returns `source: live`.
-  - **Fallback Stale Response:** Verify provider failure serves stale Redis data tagged `source: stale-fallback` when present; returns 502/503 when empty.
+  - **Cache-Fetch Logic:** Verify cache hit returns 200 with source: cache; cache miss calls provider, updates cache, and returns source: live.
+  - **Fallback Stale Response:** Verify provider failure serves stale Redis data tagged source: stale-fallback when present; returns 502/503 when empty.
   - **Price Delta Math:** Verify threshold check accurately identifies price movements exceeding the configured delta and triggers asynchronous Lambda dispatch.
 - **On-Demand SQS Worker (§4.3, §4.9):**
-  - Mock AWS interactions via `moto` or `pytest-mock`.
-  - Test worker long-polling lifecycle: polls SQS, ingests a matching-`request_id` message, calls `DeleteMessage`, and exits.
+  - Mock AWS interactions via moto or pytest-mock.
+  - Test worker long-polling lifecycle: polls SQS, ingests a matching-request_id message, calls DeleteMessage, and exits.
   - Test bounded timeout: poller cleanly shuts down after 2–3 minutes without hanging if Lambda fails to publish.
-  - Test idempotency: duplicate deliveries of the same `request_id` update existing Postgres records rather than inserting duplicate rows.
-  - Test non-matching `request_id`: a message belonging to a different invocation is released via `ChangeMessageVisibility=0`, not deleted or ingested, and the poller continues waiting for its own message.
+  - Test idempotency: duplicate deliveries of the same request_id update existing Postgres records rather than inserting duplicate rows.
+  - Test non-matching request_id: a message belonging to a different invocation is released via ChangeMessageVisibility=0, not deleted or ingested, and the poller continues waiting for its own message.
   - Test startup drain loop: multiple backlogged messages are all fetched and persisted, not just the first one.
   - Test periodic backstop sweep: a message with no active poller watching for it is still picked up on the next scheduled sweep.
 - **AWS Lambda & LangChain News Pipeline (§4.9):**
@@ -517,44 +524,44 @@ A multi-tiered testing strategy ensures each component can be verified quickly a
   - Test prompt templates and LangChain output parsing into structured summary and source URL array.
   - Test SSM Parameter Store decryption mock for LLM API key loading.
 - **Desktop Widget UI & Packaging Logic (§4.5, §4.8):**
-  - Test polling state machines: decoupled intervals for `/ticker` and `/alerts`, client-side `since` timestamp tracking.
+  - Test polling state machines: decoupled intervals for /ticker and /alerts, client-side since timestamp tracking.
   - Test error states: last-known price displayed with staleness indicator when API is unreachable.
-  - Test OS startup integration: mock `winreg` (Windows) and `plistlib`/filesystem (macOS) to verify clean registration and unregistration.
+  - Test OS startup integration: mock winreg (Windows) and plistlib/filesystem (macOS) to verify clean registration and unregistration.
 
 #### 2. Integration Testing (Real Component & Service Interactions)
 
-- **API + Redis + PostgreSQL Stack (`testcontainers-python` or ephemeral Docker Compose):**
-  - Spin up isolated `redis:alpine` and `postgres:alpine` test containers.
+- **API + Redis + PostgreSQL Stack (testcontainers-python or ephemeral Docker Compose):**
+  - Spin up isolated redis:alpine and postgres:alpine test containers.
   - Verify real Redis read/write/expiration behavior and connection pool reuse.
   - Verify live fetches write history records to PostgreSQL asynchronously without degrading HTTP response latency.
-  - Verify indexed composite queries on `(symbol, timestamp)` execute as index scans without full-table scans.
+  - Verify indexed composite queries on (symbol, timestamp) execute as index scans without full-table scans.
 
 - **Database Schema Migrations (Alembic):**
-  - Automated migration test executing `alembic upgrade head` followed by `alembic downgrade base` against a test database to confirm non-destructive, reversible migrations.
+  - Automated migration test executing alembic upgrade head followed by alembic downgrade base against a test database to confirm non-destructive, reversible migrations.
 - **Local SQS Integration (Moto Server / LocalStack):**
   - Test the on-demand SQS consumer against a local queue with real long-polling and DLQ redrive policies.
 
 #### 3. Smoke & Deployment Verification Tests
 
 - **Pi Container Stack Health:**
-  - Post-deploy automated curl command hitting `GET /ticker/{symbol}` and `GET /alerts` with the configured API key to confirm container stack is up and responding.
+  - Post-deploy automated curl command hitting GET /ticker/{symbol} and GET /alerts with the configured API key to confirm container stack is up and responding.
 
 - **AWS Lambda Pipeline Smoke Test:**
-  - Post-deploy direct Lambda invocation (`aws lambda invoke`) with test symbol payload to verify execution succeeds and a test message appears on SQS.
+  - Post-deploy direct Lambda invocation (aws lambda invoke) with test symbol payload to verify execution succeeds and a test message appears on SQS.
 - **Desktop Packaging Smoke Test:**
-  - In CI matrix runners (`windows-latest`, `macos-latest`), run PyInstaller output with `--test` or `--version` flag to verify executables bundle without missing shared libraries or dynamic link errors.
+  - In CI matrix runners (windows-latest, macos-latest), run PyInstaller output with --test or --version flag to verify executables bundle without missing shared libraries or dynamic link errors.
 
 ### 9.2 Tooling Summary
 
 | Layer | Tools | Purpose |
 | --- | --- | --- |
-| Test Runner | `pytest`, `pytest-asyncio` | Async test execution and fixtures |
-| HTTP Mocking | `respx`, `httpx` | Mocking provider HTTP calls |
-| Redis Mocking | `fakeredis` | In-memory Redis simulation |
-| AWS Mocking | `moto`, `botocore.stub` | SQS and Lambda invocation simulation |
-| Containerized Infra | `testcontainers-python` | Ephemeral Redis & Postgres for integration tests |
-| Migrations | `alembic` | Up/down migration verification |
-| Code Quality | `ruff`, `mypy` | Fast linting, formatting, and static typing |
+| Test Runner | pytest, pytest-asyncio | Async test execution and fixtures |
+| HTTP Mocking | respx, httpx | Mocking provider HTTP calls |
+| Redis Mocking | fakeredis | In-memory Redis simulation |
+| AWS Mocking | moto, botocore.stub | SQS and Lambda invocation simulation |
+| Containerized Infra | testcontainers-python | Ephemeral Redis & Postgres for integration tests |
+| Migrations | alembic | Up/down migration verification |
+| Code Quality | ruff, mypy | Fast linting, formatting, and static typing |
 
 ## 10. CI/CD Pipeline
 
@@ -562,29 +569,30 @@ A multi-tiered testing strategy ensures each component can be verified quickly a
 
 **Workflow files:**
 
-- `.github/workflows/ci.yml` — every push/PR: lint, unit tests (mocking Redis/Postgres/provider/SQS so tests need no real infra), integration tests against testcontainers, `docker build` sanity check, Lambda unit tests (mocking the LangChain/news/LLM calls), `terraform plan` for the AWS slice (§11).
-- `.github/workflows/deploy.yml` — push to `main`: build the multi-arch API image, push it to a registry, deploy to the Pi; separately, package and deploy the Lambda's code and `terraform apply` the AWS slice.
-- `.github/workflows/release.yml` — version tag: matrix widget build (`windows-latest` + `macos-latest`), unchanged from before.
+- .github/workflows/ci.yml — every push/PR: lint, unit tests (mocking Redis/Postgres/provider/SQS so tests need no real infra), integration tests against testcontainers, docker build sanity check, Lambda unit tests (mocking the LangChain/news/LLM calls), terraform plan for the AWS slice (§11).
+- .github/workflows/deploy.yml — push to main: build the multi-arch API image, push it to a registry, deploy to the Pi; separately, package and deploy the Lambda's code and terraform apply the AWS slice.
+- .github/workflows/k8s.yml — push to main: lint Helm chart (helm lint), package chart, and run helm upgrade --install to deploy the service to a Kubernetes cluster (e.g., a Raspberry Pi K3s cluster or a cloud dev cluster).
+- .github/workflows/release.yml — version tag: matrix widget build (windows-latest + macos-latest), unchanged from before.
 
 **The ARM64 build problem (Pi image only — the Lambda build is unaffected, standard x86_64):**
 
-- GitHub's standard hosted runners are x86_64. A Pi 4 is ARM64. Building an ARM64-compatible image on an x86_64 runner requires cross-compilation via Docker Buildx with QEMU emulation (`docker/setup-qemu-action` + `docker/setup-buildx-action` + `docker/build-push-action` with `platforms: linux/arm64`) — the standard, free approach, though emulated builds are noticeably slower than native ones.
-- Push the built image to **GitHub Container Registry (ghcr.io)** — free at hobby scale, already authenticated via the workflow's built-in `GITHUB_TOKEN`, no separate registry account needed.
+- GitHub's standard hosted runners are x86_64. A Pi 4 is ARM64. Building an ARM64-compatible image on an x86_64 runner requires cross-compilation via Docker Buildx with QEMU emulation (docker/setup-qemu-action + docker/setup-buildx-action + docker/build-push-action with platforms: linux/arm64) — the standard, free approach, though emulated builds are noticeably slower than native ones.
+- Push the built image to **GitHub Container Registry (ghcr.io)** — free at hobby scale, already authenticated via the workflow's built-in GITHUB_TOKEN, no separate registry account needed.
 - The Lambda's deployment package, by contrast, needs no cross-compilation — Lambda's Python runtime is x86_64 or arm64 by your own choice of Lambda architecture setting, independent of what hardware CI runs on; a standard hosted runner builds and zips it (or builds a container image for the Lambda, if the LangChain/dependency footprint favors that over a zip package) without QEMU involved.
 
 **Deploying to the Pi — two viable approaches, pick one deliberately:**
 
 | Approach | How it works | Tradeoff |
 | --- | --- | --- |
-| Self-hosted GitHub Actions runner, installed on the Pi itself | The final deploy job actually executes on the Pi (registered as a self-hosted runner), so `docker compose pull && docker compose up -d` runs locally with no network hop needed | Cleanest, most idiomatic for a fixed personal device; the Pi needs to stay reachable to GitHub to pick up jobs |
+| Self-hosted GitHub Actions runner, installed on the Pi itself | The final deploy job actually executes on the Pi (registered as a self-hosted runner), so docker compose pull && docker compose up -d runs locally with no network hop needed | Cleanest, most idiomatic for a fixed personal device; the Pi needs to stay reachable to GitHub to pick up jobs |
 | SSH deploy from a GitHub-hosted runner | A hosted runner SSHs into the Pi (key stored as a repo secret) and runs the same pull/up commands remotely | No runner software to maintain on the Pi; requires the Pi's SSH port to be reachable from GitHub's runner IPs, which pushes against the LAN-only posture in §4.4 unless done over Tailscale |
 
 Given §4.4's LAN-only default, the **self-hosted runner on the Pi** is the better fit — it never requires opening any inbound path to the Pi from the internet; the Pi reaches out to GitHub, not the other way around. Note this same runner can also be the one that applies the Pi-side IAM credential's rotation if that's ever automated, since it already runs in a trusted location.
 
 **Deploying the Lambda + AWS slice — a standard, OIDC-authenticated GitHub-hosted runner job (no ARM64/Pi-specific concerns):**
 
-- `terraform apply` (§10) reconciles the Lambda function, SQS queue, IAM roles/policies, and SSM parameter definition (not its value — see §10) against the merged config.
-- Update the Lambda's code (via Terraform's Lambda resource pointing at the newly-built package, or a separate `aws lambda update-function-code` step, matching whichever pattern the Terraform Lambda resource expects).
+- terraform apply (§10) reconciles the Lambda function, SQS queue, IAM roles/policies, and SSM parameter definition (not its value — see §10) against the merged config.
+- Update the Lambda's code (via Terraform's Lambda resource pointing at the newly-built package, or a separate aws lambda update-function-code step, matching whichever pattern the Terraform Lambda resource expects).
 - Smoke test: invoke the Lambda directly with a test payload and confirm a message lands on the SQS queue — a more targeted check than the Pi-side smoke test, since this pipeline has its own failure surface.
 
 **Best practices carried over from the AWS version, still applicable:**
@@ -593,7 +601,7 @@ Given §4.4's LAN-only default, the **self-hosted runner on the Pi** is the bett
 - Secrets (API key, DB credentials, SSH key if that path is chosen, LLM API key's *value* — see §11) live in GitHub Actions secrets, never committed.
 - Pin action versions and the base image tags in the Dockerfile, so a working pipeline doesn't silently break from an upstream update.
 - OIDC for the AWS-side deploy job, exactly as recommended earlier in this spec's history for the cloud-hosted architecture — no long-lived AWS access keys in GitHub secrets, a scoped role assumed per-run instead.
-- Smoke test after deploy — a real request to the Pi's `/ticker/{symbol}` endpoint (through the self-hosted runner, which already has LAN access) to confirm the Pi-side deploy works, plus the Lambda smoke test above for the AWS-side deploy.
+- Smoke test after deploy — a real request to the Pi's /ticker/{symbol} endpoint (through the self-hosted runner, which already has LAN access) to confirm the Pi-side deploy works, plus the Lambda smoke test above for the AWS-side deploy.
 
 ## 11. Deployment & Configuration as Code
 
@@ -603,9 +611,9 @@ Given §4.4's LAN-only default, the **self-hosted runner on the Pi** is the bett
 
 - The Lambda function (runtime, memory/timeout, environment configuration, deployment package reference).
 - The SQS queue and its dead-letter queue + redrive policy (§4.9).
-- The Lambda's execution role: least-privilege `sqs:SendMessage` on the one queue ARN, `ssm:GetParameter` on the one parameter ARN, plus `kms:Decrypt` if a customer-managed key is used.
-- The Pi-side IAM identity's policy: least-privilege `lambda:InvokeFunction` on the one function ARN, and `sqs:ReceiveMessage`/`sqs:DeleteMessage`/`sqs:GetQueueUrl` on the one queue ARN — two narrow statements, not a combined broad one.
-- The SSM Parameter Store parameter's *definition* (name, type `SecureString`, KMS key) — not its value. The value (the actual LLM API key) is set out-of-band (via CI secrets on first deploy, or manually once) so the key itself never sits in Terraform state or a `.tfvars` file in plaintext.
+- The Lambda's execution role: least-privilege sqs:SendMessage on the one queue ARN, ssm:GetParameter on the one parameter ARN, plus kms:Decrypt if a customer-managed key is used.
+- The Pi-side IAM identity's policy: least-privilege lambda:InvokeFunction on the one function ARN, and sqs:ReceiveMessage/sqs:DeleteMessage/sqs:GetQueueUrl on the one queue ARN — two narrow statements, not a combined broad one.
+- The SSM Parameter Store parameter's *definition* (name, type SecureString, KMS key) — not its value. The value (the actual LLM API key) is set out-of-band (via CI secrets on first deploy, or manually once) so the key itself never sits in Terraform state or a .tfvars file in plaintext.
 - The OIDC provider + IAM role that the AWS-side CI job assumes (§10) — the same bootstrap-once-then-Terraform-owns-it pattern used throughout this spec's AWS history.
 
 **What Terraform still does NOT manage:**
@@ -615,22 +623,22 @@ Given §4.4's LAN-only default, the **self-hosted runner on the Pi** is the bett
 
 **State management:** the same S3+DynamoDB-backend pattern from this spec's earlier AWS-hosted history is the right fit here too — small, cheap, and it solves the same "does my laptop's state match what CI sees" problem, just for a much smaller resource set now. If you'd rather not stand up an S3 bucket and DynamoDB table purely to back a handful of resources, Terraform Cloud's free tier is a reasonable lighter-weight alternative for state storage at this scale.
 
-**Structure:** a single small root module (`lambda.tf`, `sqs.tf`, `iam.tf`) is more than sufficient — this is an even smaller surface than the original AWS-hosted backend ever was, so there's even less reason to reach for `modules/`.
+**Structure:** a single small root module (lambda.tf, sqs.tf, iam.tf) is more than sufficient — this is an even smaller surface than the original AWS-hosted backend ever was, so there's even less reason to reach for modules/.
 
 **What lives in the repo (Pi side, Compose — unchanged):**
 
-- `docker-compose.yml` — service definitions (§4.6), including the NVMe volume mount, resource limits, restart policies, and healthchecks.
-- `Dockerfile` for the `api` service.
-- `.env.example` — a template showing which environment variables are required (API key, DB credentials, provider API key), without real values, so setup is self-documenting.
+- docker-compose.yml — service definitions (§4.6), including the NVMe volume mount, resource limits, restart policies, and healthchecks.
+- Dockerfile for the api service.
+- .env.example — a template showing which environment variables are required (API key, DB credentials, provider API key), without real values, so setup is self-documenting.
 - Alembic migration files (§4.7) — schema changes tracked the same way code changes are.
 
 **What does NOT live in the repo:**
 
-- The actual `.env` file with real secrets — git-ignored, created once on the Pi (or populated via the CI deploy step from GitHub secrets).
-- The NVMe mount configuration itself (`/etc/fstab` entry) — this is host-level Pi configuration, arguably worth documenting in a `SETUP.md` (a one-time manual step) rather than something Compose or CI manages, since it's about the physical Pi's disk layout, not the application.
+- The actual .env file with real secrets — git-ignored, created once on the Pi (or populated via the CI deploy step from GitHub secrets).
+- The NVMe mount configuration itself (/etc/fstab entry) — this is host-level Pi configuration, arguably worth documenting in a SETUP.md (a one-time manual step) rather than something Compose or CI manages, since it's about the physical Pi's disk layout, not the application.
 - The LLM API key's value, and Terraform state itself (lives in the remote backend, not the repo).
 
-**Environment separation:** at this scale, a single environment is still the obvious and correct choice on both sides — one Pi, one AWS account, no meaningful dev/prod split. The `ci.yml`/`deploy.yml` split already gives a review step before anything real changes, on both the Compose side and the Terraform side.
+**Environment separation:** at this scale, a single environment is still the obvious and correct choice on both sides — one Pi, one AWS account, no meaningful dev/prod split. The ci.yml/deploy.yml split already gives a review step before anything real changes, on both the Compose side and the Terraform side.
 
 ## 12. Observability
 
@@ -638,11 +646,11 @@ Given §4.4's LAN-only default, the **self-hosted runner on the Pi** is the bett
 
 ### 12.1 Logging Architecture
 
-#### 1. Server-Side (FastAPI `api` Container)
+#### 1. Server-Side (FastAPI api Container)
 
-- **Structured JSON Logs:** All server logs are formatted as JSON lines printed to `stdout`, captured by Docker's log driver:
+- **Structured JSON Logs:** All server logs are formatted as JSON lines printed to stdout, captured by Docker's log driver:
 
-  ```json
+  json
   {
     "timestamp": "2026-09-11T16:20:00.123Z",
     "level": "INFO",
@@ -654,38 +662,36 @@ Given §4.4's LAN-only default, the **self-hosted runner on the Pi** is the bett
     "cache_status": "hit",
     "provider_latency_ms": null
   }
-  ```
+  
+- **Log Rotation Limits:** Explicit max-size and max-file directives on Docker's json-file log driver prevent unbounded disk consumption on the NVMe/SD card:
 
-- **Log Rotation Limits:** Explicit `max-size` and `max-file` directives on Docker's `json-file` log driver prevent unbounded disk consumption on the NVMe/SD card:
-
-  ```yaml
+  yaml
   logging:
     driver: "json-file"
     options:
       max-size: "10m"
       max-file: "3"
-  ```
-
+  
 - **On-Demand SQS Worker Logging:** Logs lifecycle transitions (task spawned, SQS long-poll wait, message received, request-ID match/no-match, message upserted, message deleted or released back to queue, task timed out, periodic sweep run).
-- **Day-to-Day Inspection:** `docker compose logs -f api` or `docker compose logs --tail=100 -f` provides instant real-time log inspection on the Pi.
+- **Day-to-Day Inspection:** docker compose logs -f api or docker compose logs --tail=100 -f provides instant real-time log inspection on the Pi.
 
 #### 2. Cloud-Side (AWS Lambda & SQS)
 
-- **Structured CloudWatch Logs:** Lambda outputs JSON log lines recording symbol, price delta, LangChain retrieval duration, LLM inference latency, token counts, and SQS `SendMessage` results.
+- **Structured CloudWatch Logs:** Lambda outputs JSON log lines recording symbol, price delta, LangChain retrieval duration, LLM inference latency, token counts, and SQS SendMessage results.
 - **Log Retention:** Explicitly set CloudWatch log group retention to 7 or 14 days in Terraform to prevent accumulating storage costs beyond the free tier.
 
 #### 3. Client-Side (Desktop Widget)
 
-- **Local Application Log:** Stored in the OS user directory (`%APPDATA%\StockTicker\widget.log` on Windows, `~/Library/Logs/StockTicker/widget.log` on macOS).
+- **Local Application Log:** Stored in the OS user directory (%APPDATA%\StockTicker\widget.log on Windows, ~/Library/Logs/StockTicker/widget.log on macOS).
 - Rotated at 5MB (max 2 files) capturing network errors, retry attempts, cache staleness states, and OS start-at-login configuration events.
 
 ### 12.2 Health Checks & Readiness Probes
 
-#### 1. Application Health Endpoint (`GET /health`)
+#### 1. Application Health Endpoint (GET /health)
 
-FastAPI exposes a dedicated, unauthenticated lightweight health route (`GET /health`) returning:
+FastAPI exposes a dedicated, unauthenticated lightweight health route (GET /health) returning:
 
-```json
+json
 {
   "status": "healthy",
   "uptime_seconds": 86400,
@@ -699,35 +705,34 @@ FastAPI exposes a dedicated, unauthenticated lightweight health route (`GET /hea
     }
   }
 }
-```
 
 If Redis or Postgres fails to respond within 1.5 seconds, or if NVMe free space drops below 5%, the endpoint returns HTTP 503.
 
 #### 2. Docker Healthchecks
 
-- `api` service: Periodically queries `curl -f http://localhost:8000/health || exit 1` every 30s.
-- `postgres` service: Runs `pg_isready -U stockuser -d stockdata` every 15s.
-- Combined with `restart: unless-stopped`, Docker autonomously detects and reboots hung containers without user intervention.
+- api service: Periodically queries curl -f <http://localhost:8000/health> || exit 1 every 30s.
+- postgres service: Runs pg_isready -U stockuser -d stockdata every 15s.
+- Combined with restart: unless-stopped, Docker autonomously detects and reboots hung containers without user intervention.
 
 ### 12.3 Distributed Correlation Tracing
 
 To trace a price movement from initial detection to final widget news rendering without expensive APM SaaS:
 
-1. **Widget Request:** Widget generates a UUID `X-Correlation-ID` header on polling `/ticker/{symbol}`.
-2. **Pi Detection:** If a large price delta is detected, the Pi passes `correlation_id` in the asynchronous Lambda invocation payload.
-3. **Lambda Processing:** Lambda attaches `correlation_id` as an SQS Message Attribute and logs it with LLM metrics.
-4. **SQS Ingestion:** Pi on-demand consumer reads the attribute, logs ingestion against `correlation_id`, and saves `request_id` in Postgres.
-5. **Widget Delivery:** When the widget retrieves the alert via `GET /alerts`, the log correlates the full lifecycle back to the original trigger.
+1. **Widget Request:** Widget generates a UUID X-Correlation-ID header on polling /ticker/{symbol}.
+2. **Pi Detection:** If a large price delta is detected, the Pi passes correlation_id in the asynchronous Lambda invocation payload.
+3. **Lambda Processing:** Lambda attaches correlation_id as an SQS Message Attribute and logs it with LLM metrics.
+4. **SQS Ingestion:** Pi on-demand consumer reads the attribute, logs ingestion against correlation_id, and saves request_id in Postgres.
+5. **Widget Delivery:** When the widget retrieves the alert via GET /alerts, the log correlates the full lifecycle back to the original trigger.
 
 ### 12.4 Metrics & Outage Alarms
 
 - **CloudWatch Alarm (Pi Outage Detection):**
-  - Metric: SQS `ApproximateAgeOfOldestMessage`.
-  - Condition: `> 900 seconds` (15 minutes).
+  - Metric: SQS ApproximateAgeOfOldestMessage.
+  - Condition: > 900 seconds (15 minutes).
   - Implication: A news alert is waiting in the queue, but the Pi consumer has failed to collect it (Pi powered off, home network down, or container crashed).
   - Notification: Free AWS SNS email notification alerting you that your Raspberry Pi is offline.
 - **Hardware & Thermals Visibility:**
-  - Ad hoc verification of Pi health via terminal: `vcgencmd measure_temp` (thermal throttling check) and `docker stats` (container RAM/CPU usage).
+  - Ad hoc verification of Pi health via terminal: vcgencmd measure_temp (thermal throttling check) and docker stats (container RAM/CPU usage).
   - Full Prometheus/Grafana hardware exporter deferred to Phase 5.
 
 ## 13. Open Questions (resolve before/while building)
@@ -747,7 +752,7 @@ To trace a price movement from initial detection to final widget news rendering 
 - Does the Lambda deploy as a zip package or a container image — dependent on how heavy the LangChain + news/LLM client dependency footprint ends up being?
 - Should start-at-login default to on (with the first-launch prompt framed as an opt-out) or off (opt-in) — worth deciding based on how much you want the widget running unattended versus how much you want to consciously launch it each session?
 - Alerts poll interval — 30s, 60s, longer? Trades freshness of the news panel against extra requests to the Pi for what's usually going to be an empty result.
-- Should `GET /alerts` support filtering by `symbol` from day one, or is a single unfiltered feed (across whatever symbols the widget tracks) sufficient until multi-symbol/watchlist support (above) actually lands?
+- Should GET /alerts support filtering by symbol from day one, or is a single unfiltered feed (across whatever symbols the widget tracks) sufficient until multi-symbol/watchlist support (above) actually lands?
 
 ## 14. Phased Implementation Roadmap (MVP to Bells & Whistles)
 
@@ -755,45 +760,58 @@ To prevent an overwhelming day-one build, the architecture is broken down into 5
 
 ```mermaid
 flowchart LR
-    A["v1.0 MVP<br/>(Pi + Redis + DB + LAN Widget)"] --> B["v1.1 Desktop<br/>(PyInstaller + Login + Tailscale)"]
-    B --> C["v2.0 Smart Alerts<br/>(Lambda + SQS + News Panel)"]
-    C --> D["v2.5 DevOps<br/>(GitHub Actions + CW Alarms)"]
-    D --> E["v3.0 Bells & Whistles<br/>(Watchlists + Push + Charts)"]
+    A["v1.0 MVP\n(Pi + Redis + DB + LAN Widget)"] --> B["v1.1 Desktop\n(PyInstaller + Login + Tailscale)"]
+    B --> C["v2.0 Smart Alerts\n(Lambda + SQS + News Panel)"]
+    C --> D["v2.5 DevOps\n(GitHub Actions + CW Alarms)"]
+    D --> E["v3.0 Advanced Features & Enhancements\n(Watchlists + Push + Charts)"]
 ```
 
 ### Phase 1: MVP — The Core Self-Hosted Ticker (v1.0)
 >
 > **Goal:** Deploy a functional, durable stock ticker on the Raspberry Pi 4 serving the desktop widget over the home LAN with **$0 cloud dependencies**.
 
-- **Host & Hardware Hardening:** Boot directly from NVMe SSD over USB3 (ditching SD card), official 15W power supply validation (`vcgencmd get_throttled`), active/passive heatsink cooling, `fstrim` cron, static DHCP reservation, NTP clock sync, and `ufw` firewall (§4.10).
-- **Raspberry Pi Backend:** Docker Compose stack orchestrating 3 containers (`api` FastAPI, `redis:alpine` cache, `postgres:alpine` with NVMe bind-mount) (§4.6).
+- **Host & Hardware Hardening:** Boot directly from NVMe SSD over USB3 (ditching SD card), official 15W power supply validation (vcgencmd get_throttled), active/passive heatsink cooling, fstrim cron, static DHCP reservation, NTP clock sync, and ufw firewall (§4.10).
+- **Raspberry Pi Backend:** Docker Compose stack orchestrating 3 containers (api FastAPI, redis:alpine cache, postgres:alpine with NVMe bind-mount) (§4.6).
 - **Market Data Client:** Swappable provider integration with market-hours TTL policies in Redis (§4.2) and non-blocking history writes to Postgres (§4.7).
 - **Security:** Static shared API key header check; LAN-only network posture (§4.4).
-- **Desktop Widget:** Streamlit or Flask UI wrapped in `pywebview`, running from a local virtual environment on the host machine, polling `GET /ticker/{symbol}` (§4.5).
+- **Desktop Widget:** Streamlit or Flask UI wrapped in pywebview, running from a local virtual environment on the host machine, polling GET /ticker/{symbol} (§4.5).
 - *Scope Exclusions for Phase 1:* No AWS infrastructure (Lambda, SQS), no automated CI/CD, no OS startup registration, no packaged binaries.
 
 ### Phase 2: Native Desktop Experience & Remote Access (v1.1)
+
+- System Tray Companion (`pystray`): Minimize widget to system tray / menu bar with status glance and hide/show toggle.
+
 >
 > **Goal:** Transform the widget into a polished, permanent desktop application accessible from anywhere.
 
-- **Standalone Packaging:** Package the widget via PyInstaller into an OS-native double-clickable executable (`.exe` on Windows, `.app` on macOS) without visible terminal or browser chrome (§4.8).
-- **Start at Login:** Integrate OS-level autostart via Windows Registry (`HKCU\...\Run`) and macOS `LaunchAgent` plist with first-run opt-in and an in-app settings toggle (§4.8).
+- **Standalone Packaging:** Package the widget via PyInstaller into an OS-native double-clickable executable (.exe on Windows, .app on macOS) without visible terminal or browser chrome (§4.8).
+- **Start at Login:** Integrate OS-level autostart via Windows Registry (HKCU\...\Run) and macOS LaunchAgent plist with first-run opt-in and an in-app settings toggle (§4.8).
 - **Secure Remote Access:** Configure Tailscale on the Pi and client devices for encrypted, zero-port-forwarding remote access via MagicDNS and Let's Encrypt HTTPS certs (§4.4).
 
 ### Phase 3: The "Smart" Alerting Slice (v2.0)
+
+- Watchlists / Multi‑Ticker: Support tracking portfolios and watchlists with batch cache/fetch operations.
+- Real‑Time Push Delivery: Transition UI updates from polling to Server‑Sent Events (SSE) or WebSockets for zero‑delay price and alert updates.
+- Historical Charting & Technical Indicators: Render interactive sparklines, moving averages (SMA/EMA), and RSI directly from Postgres history.
+- Mobile Push Notifications: Dispatch alerts via `ntfy.sh` or Pushover when significant price moves occur.
+
 >
 > **Goal:** Realize the event-driven AWS intelligence pipeline to source and summarize news for significant ticker price moves.
 
 - **Price Delta Detection:** Off-the-critical-path check in the Pi API triggering an asynchronous Lambda invocation on threshold breach (§4.3).
 - **Narrow AWS Cloud Infrastructure (Terraform):**
   - AWS Lambda function running LangChain + Google News RSS feed parser + cloud LLM client (§4.9).
-  - SSM Parameter Store `SecureString` for the LLM API key (§4.9).
+  - SSM Parameter Store SecureString for the LLM API key (§4.9).
   - SQS standard queue + Dead-Letter Queue (DLQ) with redrive policy (§4.9).
   - Least-privilege IAM policies for Lambda execution and Pi caller identity (§4.9, §11).
-- **On-Demand SQS Polling:** Ephemeral Pi background task that only polls SQS when a Lambda has been dispatched, matched to that invocation's own `request_id` so it can never consume another invocation's message; a container startup drain loop and a low-frequency periodic backstop sweep together close the gap where a message could otherwise arrive with no active poller watching for it (§4.9).
-- **Widget News Alerts:** Independent polling loop for `GET /alerts?since={timestamp}` and dedicated news display panel in the desktop UI (§4.5).
+- **On-Demand SQS Polling:** Ephemeral Pi background task that only polls SQS when a Lambda has been dispatched, matched to that invocation's own request_id so it can never consume another invocation's message; a container startup drain loop and a low-frequency periodic backstop sweep together close the gap where a message could otherwise arrive with no active poller watching for it (§4.9).
+- **Widget News Alerts:** Independent polling loop for GET /alerts?since={timestamp} and dedicated news display panel in the desktop UI (§4.5).
 
 ### Phase 4: Production-Grade DevOps & Observability (v2.5)
+
+- Infrastructure Dashboards: Lightweight Prometheus + Grafana stack on the Pi monitoring container metrics, hardware temperatures, and API latencies.
+- Tailscale ACLs as Code: Manage Tailscale device access policies via Terraform.
+
 >
 > **Goal:** Automate deployments, eliminate manual server maintenance, and provide proactive alerting for outages.
 
@@ -802,18 +820,18 @@ flowchart LR
   - Deploy to Pi via self-hosted GitHub Actions runner running locally on the Pi (§10).
   - Automated Terraform plan and apply for the AWS slice using OIDC authentication (§10, §11).
 - **Observability & Health:**
-  - Docker log rotation caps (`max-size`/`max-file`) to protect NVMe/SD card storage (§12).
-  - CloudWatch alarm on SQS `ApproximateAgeOfOldestMessage` to detect prolonged Pi-side consumer outages (§12).
-- **Database Backups:** Automated cron job performing regular `pg_dump` of NVMe Postgres history to secondary storage.
+  - Docker log rotation caps (max-size/max-file) to protect NVMe/SD card storage (§12).
+  - CloudWatch alarm on SQS ApproximateAgeOfOldestMessage to detect prolonged Pi-side consumer outages (§12).
+- **Database Backups:** Automated cron job performing regular pg_dump of NVMe Postgres history to secondary storage.
 
-### Phase 5: "All the Bells and Whistles" (v3.0+)
->
-> **Goal:** Expand from a single-ticker monitor into a comprehensive trading companion.
+### Phase 5: Kubernetes Deployment & Advanced Features (v3.0+)
 
-- **Watchlists / Multi-Ticker:** Support tracking portfolios and watchlists with batch cache/fetch operations.
-- **Real-Time Push Delivery:** Transition UI updates from polling to Server-Sent Events (SSE) or WebSockets for zero-delay price and alert updates.
-- **Historical Charting & Technical Indicators:** Render interactive sparklines, moving averages (SMA/EMA), and RSI computed directly from NVMe Postgres history.
-- **Mobile Push Notifications:** Dispatch alerts to smartphones via `ntfy.sh` or Pushover webhooks when significant price moves occur.
-- **System Tray Companion (`pystray`):** Minimize widget to the system tray / menu bar with glanceable price indicators and hide/show controls.
-- **Infrastructure Dashboards:** Lightweight Prometheus + Grafana stack on the Pi monitoring container resource usage, hardware temperatures, and API response latencies.
-- **Tailscale ACLs as Code:** Manage Tailscale device access policies via Terraform.
+**Responsibility:** Deploy the service to a Kubernetes cluster using Helm, while also delivering advanced features such as multi‑ticker support, real‑time push streams, charting, and mobile notifications.
+
+- **Helm Chart (charts/stock‑ticker):** Templates for Deployment, Service, ConfigMap, Secret, PersistentVolumeClaim for NVMe storage.
+- **CI/CD Integration:** Extend GitHub Actions to lint (`helm lint`), package the chart, and push to an OCI registry or GitHub Pages.
+- **Multi‑arch Image:** Build and push `linux/amd64,linux/arm64` API image used by the Helm chart.
+- **Automated Deploy Job:** `helm upgrade --install` on `main` merges targeting a K3s cluster or cloud dev cluster.
+- **Rollback & Health‑checks:** Use Helm rollback on failure; add a `postUpgrade` hook to verify pod readiness.
+- **Observability Add‑on:** Deploy Prometheus‑node‑exporter and Grafana via sub‑charts.
+- **Testing:** KinD integration test that installs the chart and runs API smoke tests.

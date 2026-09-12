@@ -1,13 +1,14 @@
 # Stock Ticker App — Implementation Roadmap
 
-This document outlines the phased delivery plan for the Stock Ticker App, derived from the engineering specification in [WIP_stock-ticker-spec.md](file:///Users/melvindisla/Desktop/Repo/Stock-Ticker-App/WIP_stock-ticker-spec.md).
+This document outlines the phased delivery plan for the Stock Ticker App, derived from the engineering specification in [stock-ticker-spec.md](stock-ticker-spec.md).
 
 ```mermaid
 flowchart LR
-    A["Phase 1: MVP<br/>(Pi + Redis + DB + LAN Widget)"] --> B["Phase 2: Desktop<br/>(PyInstaller + Login + Tailscale)"]
-    B --> C["Phase 3: Smart Alerts<br/>(Lambda + SQS + News Panel)"]
-    C --> D["Phase 4: DevOps<br/>(GitHub Actions + CW Alarms)"]
-    D --> E["Phase 5: Bells & Whistles<br/>(Watchlists + Push + Charts)"]
+    A["Phase 1: MVP\n(Pi + Redis + DB + LAN Widget)"] --> B["Phase 2: Desktop\n(PyInstaller + Login + Tailscale)"]
+    B --> C["Phase 3: Smart Alerts\n(Lambda + SQS + News Panel)"]
+    C --> D["Phase 4: DevOps\n(GitHub Actions + CW Alarms)"]
+    D --> E["Phase 5: Kubernetes Deployment\n(Helm Chart & Multi‑arch)"]
+    E --> F["Phase 6: Advanced Features & Enhancements\n(Watchlists + Push + Charts)"]
 ```
 
 ---
@@ -52,6 +53,9 @@ flowchart LR
 ---
 
 ## Phase 2: Native Desktop Experience & Remote Access (v1.1)
+
+* System Tray Companion (`pystray`): Minimize widget to system tray / menu bar with status glance and hide/show toggle.
+
 >
 > **Primary Milestone:** Widget feels like an OS-native application and is reachable securely from outside the home.
 
@@ -73,6 +77,12 @@ flowchart LR
 ---
 
 ## Phase 3: The "Smart" Alerting Slice (v2.0)
+
+* Watchlists / Multi‑Ticker: Support tracking portfolios and watchlists with batch cache/fetch operations.
+* Real‑Time Push Delivery: Transition UI updates from polling to Server‑Sent Events (SSE) or WebSockets for zero‑delay price and alert updates.
+* Historical Charting & Technical Indicators: Render interactive sparklines, moving averages (SMA/EMA), and RSI directly from Postgres history.
+* Mobile Push Notifications: Dispatch alerts via `ntfy.sh` or Pushover when significant price moves occur.
+
 >
 > **Primary Milestone:** Asynchronous AWS event-driven pipeline that sources and summarizes news on large price movements.
 
@@ -103,6 +113,10 @@ flowchart LR
 ---
 
 ## Phase 4: Production-Grade DevOps & Observability (v2.5)
+
+* Infrastructure Dashboards: Lightweight Prometheus + Grafana stack on the Pi monitoring container metrics, hardware temperatures, and API latencies.
+* Tailscale ACLs as Code: Manage Tailscale device access policies via Terraform.
+
 >
 > **Primary Milestone:** Fully automated zero-touch deploys, log rotation, and proactive alarm notifications.
 
@@ -124,16 +138,18 @@ flowchart LR
 
 ---
 
-## Phase 5: All the Bells and Whistles (v3.0+)
->
-> **Primary Milestone:** Multi-ticker tracking, real-time push streams, charting, and mobile notifications.
+## Phase 5: Kubernetes Deployment (v3.0)
 
-* [ ] **Watchlist Support:** Track and display multiple ticker symbols simultaneously with batch fetches.
-* [ ] **Real-Time Push Delivery:** Migrate from client polling to Server-Sent Events (SSE) or WebSockets from the Pi API.
-* [ ] **Charting & Technical Indicators:** Calculate moving averages (SMA/EMA) and RSI from Postgres history, rendered via interactive chart widgets.
-* [ ] **Mobile Push Notifications:** Trigger `ntfy.sh` or Pushover webhooks on price-delta alerts to notify phone directly.
-* [ ] **System Tray Companion (`pystray`):** Minimize widget to system tray / menu bar with status glance and show/hide toggle.
-* [ ] **Pi Hardware & Service Dashboards:** Lightweight Prometheus + Grafana stack on the Pi monitoring container metrics and hardware thermals.
-* [ ] **Testing & Quality Assurance:**
-  * [ ] Stress/load test batch watchlist caching to ensure provider rate limits are never exceeded.
-  * [ ] Integration tests for SSE/WebSocket connection lifecycles, reconnects, and push broadcasting.
+> **Primary Milestone:** Deploy the service to a Kubernetes cluster using Helm, enabling scalable multi-node operation and easier upgrades.
+
+* Responsibility: Deploy the service with Helm, enabling multi‑node scaling, easy upgrades, and unified configuration.
+* Helm Chart (`charts/stock‑ticker`): Templates for Deployment, Service, ConfigMap, Secret, PersistentVolumeClaim for NVMe storage.
+* CI/CD Integration: Extend GitHub Actions to lint (`helm lint`), package the chart, and push to an OCI registry or GitHub Pages.
+* Multi‑arch Image: Build and push `linux/amd64,linux/arm64` API image used by the Helm chart.
+* Automated Deploy Job: `helm upgrade --install` on `main` merges targeting a K3s cluster or cloud dev cluster.
+* Rollback & Health‑checks: Use Helm rollback on failure; add a `postUpgrade` hook to verify pod readiness.
+* Observability Add‑on: Deploy Prometheus‑node‑exporter and Grafana via Helm sub‑charts.
+* Documentation: Update README with `helm install` instructions and required `values.yaml` secrets.
+* Testing: KinD integration test that installs the chart and runs API smoke tests.
+
+---
