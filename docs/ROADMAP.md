@@ -1,29 +1,5 @@
 # Roadmap
 
-## Pre‑Phase 1: First‑Boot Bootstrapping
-
-**Goals:** Prepare a fresh Raspberry Pi (NVMe boot via USB‑3, Wi‑Fi connectivity) with a hardened OS, required runtime tools, and secure secret handling infrastructure. No application code is deployed at this stage.
-
-### Decisions & Requirements
-
-- **Boot medium:** Direct USB‑3 boot from NVMe SSD (EEPROM set to `BOOT_ORDER=0xf41`). No micro‑SD card required.
-- **Network:** Wi‑Fi only, configured via `wpa_supplicant`. No Ethernet.
-- **Automation framework:** Ansible (agent‑less, SSH‑based) will manage all provisioning steps.
-- **Secrets handling:** Runtime secrets (API keys, DB credentials, etc.) are delivered to the Pi via a GPG‑encrypted, SOPS‑encrypted payload embedded in the cloud‑init YAML; cloud‑init imports the one‑time GPG private key, decrypts the payload into a `.env` file (permissions `600`), then removes the key and encrypted blob.
-- **Observability stack:** Deferred to Phase 4.
-- **First‑boot tasks (cloud‑init / init script):**
-  - Update packages, install `ufw`, `curl`, `git`, `python3‑pip`.
-  - Harden SSH (disable password auth, allow only key‑based login).
-  - Configure `ufw` to allow ports 22 (SSH) and 8000 (API) from the local subnet and the Wi‑Fi interface.
-  - Verify power‑supply health with `vcgencmd get_throttled`.
-  - Detect NVMe device, format it (`ext4`), add it to `/etc/fstab`, mount at `/mnt/nvme`, and schedule weekly `fstrim`.
-  - Install Docker CE and Docker‑Compose (v2) and add `pi` to the `docker` group.
-  - Create placeholder directory `/home/pi/stock‑ticker` for later code.
-  - Write a log entry to `/var/log/pi‑first‑boot.log` indicating success and the device’s IP address.
-  - Optional security extras (unattended‑upgrades, Fail2Ban, auditd, MOTD banner, hardware‑temperature cron) can be added now or later.
-
-These steps ensure the Pi is ready for Phase 1 (MVP) without any manual CLI interaction.
-
 This document outlines the phased delivery plan for the Stock Ticker App, derived from the engineering specification in [WIP_stock-ticker-spec.md](file:///Users/melvindisla/Desktop/Repo/Stock-Ticker-App/WIP_stock-ticker-spec.md).
 
 ```mermaid
@@ -39,18 +15,22 @@ flowchart LR
 ## Phase 1: MVP — The Core Self-Hosted Ticker (v1.0)
 >
 > **Primary Milestone:** Reliable, persistent, containerized stock ticker running on Raspberry Pi 4 over LAN with **$0 cloud cost**.
+> **Note:** The bootstrapping and hardening tasks are now part of Phase 1 and are performed by `scripts/hardening.sh`.
 
 - [ ] **Raspberry Pi Hardware & Host OS Hardening:**
-  - [ ] Flash Raspberry Pi OS directly to NVMe SSD; update EEPROM bootloader to direct USB3 boot (`BOOT_ORDER=0xf41`) and remove microSD card entirely.
-  - [ ] Verify official 15.3W USB-C power supply (run `vcgencmd get_throttled` to confirm `0x0` / no under-voltage).
-  - [ ] Install active fan cooling or high-mass aluminum heatsink case (target <65°C under load via `vcgencmd measure_temp`).
-  - [ ] Mount NVMe drive permanently at `/mnt/nvme` via `/etc/fstab`; create PostgreSQL storage directory on NVMe mount.
-  - [ ] Verify NVMe UASP and TRIM support (`lsblk --discard`); enable weekly TRIM cron (`sudo fstrim -av`).
-  - [ ] Connect via Gigabit Ethernet and configure Static DHCP reservation on home router.
-  - [ ] Verify NTP time synchronization (`systemd-timesyncd`) to prevent AWS SigV4 clock skew issues (`RequestTimeTooSkewed`).
-  - [ ] Configure host firewall (`ufw allow 22`, `ufw allow 8000` from LAN CIDR) and enforce SSH key authentication (`PasswordAuthentication no`).
-  - [ ] Set strict `.env` file permissions on host (`chmod 600 .env`).
-  - [ ] Configure initial local database backup script (`pg_dump` compressed to `/mnt/nvme/backups/`).
+  - **Automated by `scripts/hardening.sh`:**
+    - [ ] Verify NTP time synchronization (`systemd-timesyncd`).
+    - [ ] Mount NVMe drive permanently at `/mnt/nvme` via `/etc/fstab`; enable weekly TRIM (`fstrim.timer`).
+    - [ ] Verify NVMe UASP and TRIM support (`lsblk --discard`).
+    - [ ] Configure host firewall (`ufw allow 22`, `ufw allow 8000` from LAN CIDR) and enforce SSH key authentication (`PasswordAuthentication no`).
+    - [ ] Set strict `.env` file permissions on host (`chmod 600 .env`).
+  - **Manual steps:**
+    - [ ] Flash Raspberry Pi OS directly to NVMe SSD; update EEPROM bootloader to direct USB3 boot (`BOOT_ORDER=0xf41`) and remove microSD card entirely.
+    - [ ] Verify official 15.3W USB-C power supply (run `vcgencmd get_throttled` to confirm `0x0` / no under-voltage).
+    - [ ] Install active fan cooling or high‑mass aluminum heatsink case (target <65°C under load via `vcgencmd measure_temp`).
+    - [ ] Create PostgreSQL storage directory on NVMe mount.
+    - [ ] Connect via Gigabit Ethernet and configure static DHCP reservation on home router.
+    - [ ] Configure initial local database backup script (`pg_dump` compressed to `/mnt/nvme/backups/`).
 - [ ] **Containerized Backend (`docker-compose.yml`):**
   - [ ] `api` service: FastAPI + Uvicorn server.
   - [ ] `redis` service: `redis:alpine` in-memory cache.

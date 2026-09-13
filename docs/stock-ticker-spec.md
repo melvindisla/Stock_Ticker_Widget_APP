@@ -346,7 +346,7 @@ This is inherently platform-specific (there's no cross-platform API for "run thi
 - **Static DHCP Reservation:** Home routers assign dynamic IP addresses via DHCP that change on router reboot or lease expiry, which would break the desktop widget's target address.
   - Configure a **Static DHCP Reservation** in the home router mapping the Pi’s MAC address to a fixed local IP (e.g. `192.168.1.150`), OR
   - Rely exclusively on  MagicDNS (`http://raspberrypi.tailnet.ts.net:8000`), which remains stable across physical networks.
-- **Wired Ethernet Preferred:** Connect the Pi to the local router via Gigabit Ethernet rather than Wi-Fi to eliminate packet jitter, sleep-mode disconnects, and multicast DNS bridge issues across 2.4GHz/5GHz bands.
+- **Wi‑Fi Preferred:** Connect the Pi to the local router via Wi‑Fi (2.4GHz/5GHz) – this is the default connectivity method. Ensure a stable SSID and a strong signal; the static DHCP reservation (or MagicDNS) will keep the address stable.
 
 #### 5. System Clock & NTP (The "RTC" Limitation)
 
