@@ -1,6 +1,6 @@
 # Stock Ticker App — Engineering Spec
 
-## Pre‑Phase 1: First‑Boot Bootstrapping
+
 
 **Goals:** Prepare a fresh Raspberry Pi (NVMe boot via USB‑3, Wi‑Fi connectivity) with a hardened OS, required runtime tools, and secure secret handling infrastructure. No application code is deployed at this stage.
 
@@ -777,7 +777,18 @@ flowchart LR
 >
 > **Goal:** Deploy a functional, durable stock ticker on the Raspberry Pi 4 serving the desktop widget over the home LAN with **$0 cloud dependencies**.
 
-- **Host & Hardware Hardening:** Boot directly from NVMe SSD over USB3 (ditching SD card), official 15W power supply validation (`vcgencmd get_throttled`), active/passive heatsink cooling, `fstrim` cron, static DHCP reservation, NTP clock sync, and `ufw` firewall (§4.10).
+- **Host & Hardware Hardening:**
+  - **Automated by `scripts/hardening.sh`:**
+    - Verify NTP clock sync (`systemd-timesyncd`).
+    - Mount NVMe SSD at `/mnt/nvme` and enable `fstrim` cron.
+    - Verify NVMe UASP and TRIM support (`lsblk --discard`).
+    - Configure `ufw` firewall (allow SSH and API port) and enforce SSH key authentication.
+    - Set strict `.env` permissions (`chmod 600 .env`).
+  - **Manual steps:**
+    - Boot directly from NVMe SSD over USB3 (update EEPROM `BOOT_ORDER=0xf41`) and remove microSD card.
+    - Validate official 15W power supply (`vcgencmd get_throttled`).
+    - Install active/passive heatsink cooling.
+    - Configure static DHCP reservation.
 - **Raspberry Pi Backend:** Docker Compose stack orchestrating 3 containers (`api` FastAPI, `redis:alpine` cache, `postgres:alpine` with NVMe bind-mount) (§4.6).
 - **Market Data Client:** Swappable provider integration with market-hours TTL policies in Redis (§4.2) and non-blocking history writes to Postgres (§4.7).
 - **Security:** Static shared API key header check; LAN-only network posture (§4.4).
