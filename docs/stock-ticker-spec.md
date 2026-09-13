@@ -1,10 +1,8 @@
 # Stock Ticker App — Engineering Spec
 
-
-
 **Goals:** Prepare a fresh Raspberry Pi (NVMe boot via USB‑3, Wi‑Fi connectivity) with a hardened OS, required runtime tools, and secure secret handling infrastructure. No application code is deployed at this stage.
 
-### Decisions & Requirements
+## Decisions & Requirements
 
 - **Boot medium:** Direct USB‑3 boot from NVMe SSD (EEPROM set to `BOOT_ORDER=0xf41`). No micro‑SD card required.
 - **Network:** Wi‑Fi only, configured via `wpa_supplicant`. No Ethernet.
