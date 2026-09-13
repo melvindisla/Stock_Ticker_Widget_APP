@@ -43,30 +43,34 @@ A system that serves near-real-time stock ticker data to a standalone desktop wi
 
 ## 3. Architecture
 
-```text
-[Widget window, Mac/Windows] --HTTPS (LAN or )--> [Raspberry Pi 4]
-     (pywebview, packaged                                        |
-      .exe/.app, holds an                              [Docker Compose stack]
-      API key in local config)                                   |
-                                                    +--------------+--------------+
-                                                    |              |              |
-                                              [api container] [redis]      [postgres]
-                                              FastAPI+Uvicorn  (cache)   (persistent DB,
-                                                    |                     volume on NVMe)
-                                                    | large price delta detected
-                                                    | (Pi → AWS, outbound only, SigV4-signed)
-                                                    v
-                                          [AWS Lambda: InvokeFunction]
-                                                    |
-                                    LangChain + Google News RSS + cloud LLM
-                                                    |
-                                          write result to [SQS queue]
-                                                    |
-                                    (Pi → AWS, outbound only, on-demand long-poll)
-                                                    v
-                                    [sqs-consumer, on-demand task in api container]
-                                                    |
-                                          write to Postgres (news/alert table)
+```mermaid
+graph LR
+    %% Define node styles
+    classDef default fill:#333333,stroke:#333,stroke-width:2px;
+
+    %% Widget side
+    widget["Desktop Widget (pywebview)\n(HTTPS to Pi)"]:::default
+
+    %% Pi side (Docker stack)
+    api["FastAPI (Uvicorn)\n(calls Finnhub API)"]:::default
+    redis["Redis (cache)"]:::default
+    postgres["Postgres (NVMe‑backed)\n(persistent DB)"]:::pi
+    lambda["AWS Lambda\n(InvokeFunction) LangChain + Google News + LLM"]:::default
+    sqs["SQS Queue\n(alert messages)"]:::default
+    consumer["SQS Consumer (on‑demand)\n(in API container)"]:::default
+    alert["Write alert to Postgres"]:::default
+
+    %% Connections
+    widget -->|HTTPS| api
+    api --> |saves ticker price| redis
+    api --> |saves all types of ticker data and news links| postgres
+    api -->|calls| finnhub[Finnhub API]
+    api -->|call when large price delta| lambda
+    lambda -->| generate News | sqs
+    sqs --> consumer
+    consumer --> alert
+
+    class widget,api,redis,postgres,lambda,sqs,consumer,alert,lc default;
 ```
 
 Every arrow crossing the Pi/AWS boundary originates from the Pi — AWS Lambda never initiates a connection to the Pi. This preserves §4.4's LAN-only posture even with a real AWS component now in the architecture (§4.9). Furthermore, the Pi only polls SQS **on demand when the AWS Lambda is actually executed**, matched to that invocation's own `request_id` — plus a full drain on container startup and a low-frequency periodic backstop sweep (§4.9) — rather than running an infinite 24/7 polling loop. The loop closes back at the top: the widget polls the Pi's `GET /alerts` endpoint (§4.3) the same way it polls `GET /ticker/{symbol}`, which is how a news alert written to Postgres by the SQS consumer actually reaches the user — nothing here requires AWS to know the widget exists at all.
