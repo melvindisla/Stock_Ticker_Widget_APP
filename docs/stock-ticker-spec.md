@@ -9,7 +9,7 @@
 - **Boot medium:** Direct USB‑3 boot from NVMe SSD (EEPROM set to `BOOT_ORDER=0xf41`). No micro‑SD card required.
 - **Network:** Wi‑Fi only, configured via `wpa_supplicant`. No Ethernet.
 - **Automation framework:** Ansible (agent‑less, SSH‑based) will manage all provisioning steps.
-- **Secrets handling:** Runtime secrets (API keys, DB credentials, etc.) will be supplied manually via a `.env` file created on the Pi after first‑boot.
+- **Secrets handling:** Runtime secrets (API keys, DB credentials, etc.) are delivered to the Pi via a GPG‑encrypted, SOPS‑encrypted payload embedded in the cloud‑init YAML; cloud‑init imports the one‑time GPG private key, decrypts the payload into a `.env` file (permissions `600`), then removes the key and encrypted blob.
 - **Observability stack:** Deferred to Phase 4.
 
 ## 1. Overview
