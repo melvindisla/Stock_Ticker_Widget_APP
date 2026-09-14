@@ -19,15 +19,15 @@ flowchart LR
 
 - [ ] **Raspberry Pi Hardware & Host OS Hardening:**
   - **Automated by `scripts/hardening.sh`:**
-    - [ ] Verify NTP time synchronization (`systemd-timesyncd`).
-    - [ ] Mount NVMe drive permanently at `/mnt/nvme` via `/etc/fstab`; enable weekly TRIM (`fstrim.timer`).
-    - [ ] Verify NVMe UASP and TRIM support (`lsblk --discard`).
-    - [ ] Configure host firewall (`ufw allow 22`, `ufw allow 8000` from LAN CIDR) and enforce SSH key authentication (`PasswordAuthentication no`).
-    - [ ] Set strict `.env` file permissions on host (`chmod 600 .env`).
+    - [✅] Verify NTP time synchronization (`systemd-timesyncd`).
+    - [✅] Mount NVMe drive permanently at `/mnt/nvme` via `/etc/fstab`; enable weekly TRIM (`fstrim.timer`).
+    - [✅] Verify NVMe UASP and TRIM support (`lsblk --discard`).
+    - [✅] Configure host firewall (`ufw allow 22`, `ufw allow 8000` from LAN CIDR) and enforce SSH key authentication (`PasswordAuthentication no`).
+    - [✅] Set strict `.env` file permissions on host (`chmod 600 .env`).
   - **Manual steps:**
-    - [ ] Flash Raspberry Pi OS directly to NVMe SSD; update EEPROM bootloader to direct USB3 boot (`BOOT_ORDER=0xf41`) and remove microSD card entirely.
-    - [ ] Verify official 15.3W USB-C power supply (run `vcgencmd get_throttled` to confirm `0x0` / no under-voltage).
-    - [ ] Install active fan cooling or high‑mass aluminum heatsink case (target <65°C under load via `vcgencmd measure_temp`).
+    - [✅] Flash Raspberry Pi OS directly to NVMe SSD; update EEPROM bootloader to direct USB3 boot (`BOOT_ORDER=0xf41`) and remove microSD card entirely.
+    - [✅] Verify official 15.3W USB-C power supply (run `vcgencmd get_throttled` to confirm `0x0` / no under-voltage).
+    - [✅] Install active fan cooling or high‑mass aluminum heatsink case (target <65°C under load via `vcgencmd measure_temp`).
     - [ ] Create PostgreSQL storage directory on NVMe mount.
     - [ ] Connect via Gigabit Ethernet and configure static DHCP reservation on home router.
     - [ ] Configure initial local database backup script (`pg_dump` compressed to `/mnt/nvme/backups/`).
