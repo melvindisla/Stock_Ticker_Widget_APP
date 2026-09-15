@@ -1,3 +1,5 @@
+# ROADMAP
+
 See the [Engineering Spec](stock-ticker-spec.md) for detailed component‑level information.
 
 This document outlines the phased delivery plan for the Stock Ticker App, derived from the engineering specification in [WIP_stock-ticker-spec.md](file:///Users/melvindisla/Desktop/Repo/Stock-Ticker-App/WIP_stock-ticker-spec.md).

@@ -1,3 +1,5 @@
+# Engineering Specification
+
 See the [Roadmap](ROADMAP.md) for a high‑level phase overview.
 
 **Goals:** Prepare a fresh Raspberry Pi (NVMe boot via USB‑3, Wi‑Fi connectivity) with a hardened OS, required runtime tools, and secure secret handling infrastructure. No application code is deployed at this stage.
