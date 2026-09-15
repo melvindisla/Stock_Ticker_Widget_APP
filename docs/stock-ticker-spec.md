@@ -1,4 +1,4 @@
-# Stock Ticker App — Engineering Spec
+See the [Roadmap](ROADMAP.md) for a high‑level phase overview.
 
 **Goals:** Prepare a fresh Raspberry Pi (NVMe boot via USB‑3, Wi‑Fi connectivity) with a hardened OS, required runtime tools, and secure secret handling infrastructure. No application code is deployed at this stage.
 
@@ -39,7 +39,7 @@ A system that serves near-real-time stock ticker data to a standalone desktop wi
 - No high-availability/clustering for the Pi itself — a single Pi is a single point of failure, and that's an accepted tradeoff for a personal hobby project.
 - No real-time/synchronous news delivery — the AWS Lambda pipeline (§4.9) is explicitly asynchronous; a delay of seconds to low minutes between a price move and the news summary appearing is acceptable.
 
-## 3. Architecture
+## 3. Architecture (including Technology Stack)
 
 ```mermaid
 graph LR
@@ -71,7 +71,24 @@ graph LR
     class widget,api,redis,postgres,lambda,sqs,consumer,alert,lc default;
 ```
 
-Every arrow crossing the Pi/AWS boundary originates from the Pi — AWS Lambda never initiates a connection to the Pi. This preserves §4.4's LAN-only posture even with a real AWS component now in the architecture (§4.9). Furthermore, the Pi only polls SQS **on demand when the AWS Lambda is actually executed**, matched to that invocation's own `request_id` — plus a full drain on container startup and a low-frequency periodic backstop sweep (§4.9) — rather than running an infinite 24/7 polling loop. The loop closes back at the top: the widget polls the Pi's `GET /alerts` endpoint (§4.3) the same way it polls `GET /ticker/{symbol}`, which is how a news alert written to Postgres by the SQS consumer actually reaches the user — nothing here requires AWS to know the widget exists at all.
+### 3.1 Technology Stack
+
+The implementation relies on a well‑defined Python stack. All modules are pure‑Python or official Docker images, ensuring reproducibility on the Pi and any CI environment.
+
+| Layer | Library / Tool | Primary purpose |
+| ------- | ---------------- | ----------------- |
+| **Web framework** | **FastAPI** (>=0.100) | ASGI‑compatible API server; request routing, dependency injection, automatic OpenAPI generation. |
+| **Data validation / models** | **Pydantic** (>=2.x) | Defines request/response schemas, validates inbound JSON, serialises outbound payloads, powers FastAPI’s automatic docs. |
+| **Async HTTP client** | **httpx** (>=0.27) | Non‑blocking calls to external market‑data providers; integrates with `asyncio` event loop. |
+| **Concurrency** | **asyncio** (standard library) | Core event loop for the FastAPI app, background tasks, and httpx requests. |
+| **ORM / DB access** | **SQLAlchemy** (>=2.0) + **psycopg2‑binary** | Maps Python objects to PostgreSQL tables, handles migrations (Alembic) and transactions. |
+| **Cache** | **redis‑py** (>=5.x) | Async client for Redis, used for TTL‑based ticker caching and optional pub/sub for future extensions. |
+| **Containerisation** | **Docker** / **docker‑compose** | Packs FastAPI, Redis, PostgreSQL (and later Lambda‑like workers) into isolated containers for the Pi. |
+| **Testing** | **pytest**, **respx**, **fakeredis**, **testcontainers** | Unit tests for provider adapters, integration tests against real Redis/Postgres containers, mock httpx responses. |
+| **Infrastructure** | **Bitnami Helm charts** (Redis, PostgreSQL) | Optional Helm‑based deployment for environments beyond the Pi (e.g., CI clusters). |
+| **Optional serverless bridge** | **Mangum** (if a Lambda‑style deployment is ever needed) | Adapts FastAPI (ASGI) to AWS Lambda’s handler signature. |
+
+Every arrow crossing the Pi/AWS boundary originates from the Pi — AWS Lambda never initiates a connection to the Pi. This preserves §4.4's LAN-only posture even with a real AWS component now in the architecture (§4.9). Furthermore, the Pi only polls SQS **on demand when the AWS Lambda is actually executed**, matched to that invocation's own `request_id` — plus a full drain on container startup and a low-frequency periodic backstop sweep (§4.9) — rather than running an infinite 24/7 polling loop. The loop closes back at the top: the widget poll...
 
 **Components:**
 
@@ -88,7 +105,65 @@ Every arrow crossing the Pi/AWS boundary originates from the Pi — AWS Lambda n
 
 ## 4. Component Specs
 
-### 4.1 Provider API Client
+## Phase Breakdown
+
+### Phase 1 – MVP (v1.0)
+>
+> **Roadmap:** See the [Phase 1 – MVP](ROADMAP.md#phase-1-mvp) section for milestones.
+
+- **Features deployed:**
+  - Containerized FastAPI API (Uvicorn) exposing `/ticker/{symbol}` and `/alerts`.
+  - Redis cache for TTL‑based ticker data.
+  - PostgreSQL database on the NVMe mount for persistent ticker history and news alerts.
+  - Docker‑Compose orchestration of the three containers.
+  - LAN‑only networking with API‑key authentication.
+  - Desktop widget UI (Streamlit/Flask) that polls the API.
+- **Technologies used:** FastAPI, Pydantic, httpx, asyncio, Redis‑py, SQLAlchemy, Docker, Docker‑Compose.
+
+### Phase 2 – Native Desktop Experience (v1.1)
+
+- **Additional features:**
+  - Packaging of the widget with PyInstaller for Windows/macOS executables.
+  - Optional auto‑start integration (registry on Windows, LaunchAgent on macOS).
+  - Optional remote‑access support via a private mesh VPN.
+- **Technologies added:** PyInstaller, platform‑specific startup mechanisms, Tailscale/Mesh VPN.
+
+### Phase 3 – Smart Alerts (v2.0)
+>
+> **Roadmap:** See the [Phase 3 – Smart Alerts](ROADMAP.md#phase‑3‑the‑smart‑alerting‑slice) section for milestone overview.
+
+- **Additional features:**
+  - Asynchronous price‑move detection triggers an AWS Lambda.
+  - Lambda runs LangChain + Google News + LLM to produce a news summary.
+  - Summary is sent via SQS and consumed on‑demand by the Pi.
+- **Technologies added:** AWS Lambda, SQS, Mangum (if Lambda‑style adapter is ever needed), LangChain, LLM API.
+
+### Phase 4 – DevOps & Observability (v2.5)
+>
+> **Roadmap:** See the [Phase 4 – DevOps & Observability](ROADMAP.md#phase‑4‑production‑grade‑devops‑observability) section for milestone overview.
+
+- **Additional features:**
+  - GitHub Actions CI/CD pipelines (lint, type‑check, tests, multi‑arch Docker builds).
+  - CloudWatch alarm on SQS age, Docker log‑driver limits.
+  - Automated backup cron for Postgres dumps to NVMe.
+- **Technologies added:** GitHub Actions, CloudWatch, cron, Docker log‑driver config.
+
+### Phase 5 – Bells & Whistles (v3.0+)
+>
+> **Roadmap:** See the [Phase 5 – Bells & Whistles](ROADMAP.md#phase‑5‑all‑the‑bells‑and‑whistles) section for milestone overview.
+
+- **Future features:**
+  - Watchlist support, real‑time push via SSE/WebSockets.
+  - Interactive charting, technical indicators.
+  - Mobile push notifications (ntfy.sh / Pushover).
+  - Prometheus + Grafana monitoring stack.
+- **Technologies envisioned:** SSE/WebSockets, Plotly/Dash, ntfy.sh, Prometheus, Grafana.
+
+---
+
+## 4. Component Specs
+
+### 4.1 Provider API Client (Phase 1 – MVP)
 
 **Responsibility:** Abstract all provider-specific request/response details behind a stable interface, so the provider can be swapped without touching calling code. Unchanged from the original design — this layer never depended on AWS.
 
@@ -104,32 +179,15 @@ Every arrow crossing the Pi/AWS boundary originates from the Pi — AWS Lambda n
 - Log (or return) the provider's rate-limit headers if available, so callers can detect approaching limits.
 - No retry-with-backoff inside this layer for v1 — a failed call is a failed call; handle fallback behavior at the orchestration layer (§4.3).
 
-### 4.2 Cache Layer (Redis)
+### 4.2 Cache Layer (Redis) (Phase 1 – MVP)
 
 **Responsibility:** Store the normalized ticker data shape, keyed by symbol, with a TTL that reflects market state.
-
-**Interface contract:**
-
-- `get(symbol) -> data | not_found`
-- `set(symbol, data, ttl_seconds) -> ack`
-
-**Key schema:** `ticker:{SYMBOL}` — one key per symbol, storing the full normalized object.
-
-**TTL policy (this is a decision, not a constant):**
-
-| Market state | TTL |
-| --- | --- |
-| Regular trading hours | 15–60s |
-| Pre/post-market | 60–120s |
-| Market closed (weeknight/weekend) | Several hours |
-
-Market-state determination can be a simple day-of-week + time-of-day check against exchange hours (ignore holidays for v1, or hardcode a holiday list — known gap).
 
 **Why this still matters even without AWS billing:** the TTL policy's original purpose was twofold — avoid AWS cost, and stay under the provider's free-tier rate limit. The AWS half is gone now, but the provider rate limit is still real and still the actual constraint driving this table.
 
 **Deployment:** Redis runs as its own container in the Compose stack (§4.6) — a standard `redis:alpine` image, no external SaaS (Upstash), no DynamoDB workaround. This is simpler than the AWS version of this spec in every respect: no pay-per-request pricing to reason about, no free-tier ceiling to watch. Redis's own persistence (RDB/AOF) is unnecessary here — this is a cache, not the source of truth, and is fine to lose on container restart.
 
-### 4.3 API Service (FastAPI + Uvicorn)
+### 4.3 API Service (FastAPI + Uvicorn) (Phase 1 – MVP)
 
 **Responsibility:** The one place that implements the cache-then-fetch decision logic, exposed as a FastAPI application running as a normal long-lived server process (not a AWS Lambda-style per-invocation handler).
 
@@ -158,7 +216,7 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 - Run via `uvicorn` (optionally behind `gunicorn` with multiple Uvicorn workers if you want more than one process handling requests) — a Pi 4's 4 cores can comfortably run a couple of workers for a single-user app, though one worker is plenty at this traffic level.
 - **On-demand SQS polling:** Rather than maintaining a wasteful 24/7 background polling loop, the API process spawns a targeted, bounded background task (via FastAPI `BackgroundTasks` or `asyncio.create_task`) strictly when a AWS Lambda invocation is dispatched (§4.9). This task long-polls SQS (`WaitTimeSeconds=20`) until a message matching its own `request_id` arrives or until a bounded timeout (e.g. 2–3 minutes); a non-matching message is released back to the queue immediately (`ChangeMessageVisibility=0`) rather than consumed, so one invocation's poller can never accidentally swallow another's alert. A FastAPI lifespan startup handler runs a full drain loop (not just one call) to process any backlog left on the queue while the container was offline, and a low-frequency periodic sweep (e.g. every 10–15 minutes) acts as a backstop for the narrow case where a message arrives after every poller watching for it has already timed out.
 
-### 4.4 Access Control & Networking
+### 4.4 Access Control & Networking (Phase 1 – MVP)
 
 **Default posture**: **LAN‑only** (API only reachable on the LAN).  # Future: expose via reverse‑proxy (HTTPS) when public access is needed.
 
@@ -176,7 +234,7 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 
 **Resource limits (the Pi-native equivalent of AWS Lambda's Reserved Concurrency):** set `mem_limit`/`cpus` constraints on the `api` and `postgres` services in the Compose file. There's no per-invocation billing risk to cap anymore, but a runaway container (e.g. a bug causing a request storm) could still starve the Pi's other containers of resources — a loose cap is cheap insurance.
 
-### 4.5 Local Web-Based UI (cross-platform: Windows + macOS)
+### 4.5 Local Web-Based UI (cross‑platform: Windows + macOS) (Phase 1 – MVP)
 
 **Responsibility:** Serve a browser-accessible page, running as a local process on the user's machine, that polls the Pi's API endpoints on an interval and renders the result — both live ticker data (`GET /ticker/{symbol}`) and, now, news alerts (`GET /alerts`, §4.3).
 
@@ -200,7 +258,7 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 - Render new alerts in a dedicated panel/section of the widget's page (symbol, summary, timestamp, source links) — appended to what's already displayed, not replacing it, so a user briefly glancing away doesn't miss an alert that arrived and then scrolled off.
 - A failed alerts poll should fail silently from the user's perspective (log it, retry next interval) rather than surfacing an error state — missing a news update for one cycle is a minor, self-correcting problem, unlike a failed ticker poll where staleness genuinely matters more.
 
-### 4.6 Containerization (Docker Compose)
+### 4.6 Containerization (Docker Compose) (Phase 1 – MVP)
 
 **Responsibility:** Package and orchestrate every server-side component as containers, so the whole backend deploys and updates as one coherent unit rather than a hand-assembled set of processes on the Pi.
 
@@ -225,7 +283,7 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 - `.env` file (git-ignored) for secrets (API key, DB credentials) referenced by the Compose file via `env_file:` — never baked into the images themselves.
 - Docker's log driver configured with explicit `max-size`/`max-file` limits (§12's logging note) so container logs don't silently fill the SD card/NVMe over months of uptime.
 
-### 4.7 Persistent Database & ORM
+### 4.7 Persistent Database & ORM (Phase 1 – MVP)
 
 **Recommended: SQLAlchemy + PostgreSQL.** Every AWS-hosted-relational-database compromise from the cloud-hosted version of this spec (RDS's 12-month trial, Aurora Serverless's idle floor, SQLite-on-S3's near-zero-but-not-quite cost, DynamoDB's no-joins constraint) simply doesn't apply once the database is a container on hardware you already own — there's no cloud billing to reason about, so this is a much less constrained decision than it used to be.
 
@@ -237,7 +295,7 @@ Market-state determination can be a simple day-of-week + time-of-day check again
 
 **Data model:** the `TickerHistoryRecord` shape from §5, mapped to a SQLAlchemy model with `symbol` and `timestamp` as an indexed (and likely composite-unique) pair, mirroring the partition/sort-key design intent from the DynamoDB version of this spec, now expressed as a normal relational index.
 
-### 4.8 Widget Shell (standalone packaging)
+### 4.8 Widget Shell (standalone packaging) (Phase 2 – Native Desktop)
 
 **Responsibility:** Turn the local web UI (§4.5) into a native-feeling desktop widget — unchanged in principle from the original design.
 
@@ -272,7 +330,7 @@ This is inherently platform-specific (there's no cross-platform API for "run thi
 - The toggle in the widget's settings accurately reflects and controls the real OS-level registration state — never a UI checkbox that's disconnected from whether the entry actually exists.
 - Uninstalling/removing the widget (or toggling the setting off) removes the startup entry cleanly on both platforms — no dangling registry key or LaunchAgent plist left behind.
 
-### 4.9 Price-Move News Alert (AWS Lambda + LangChain + SQS)
+### 4.9 Price‑Move News Alert (AWS Lambda & LangChain & SQS) (Phase 3 – Smart Alerts)
 
 **Responsibility:** When a ticker moves by more than a configured threshold, source and summarize relevant news for that symbol using LangChain against a Google News backend and a cloud-hosted LLM, and get the result back to the Pi — all without ever requiring an inbound connection to the Pi.
 
@@ -319,7 +377,7 @@ This is inherently platform-specific (there's no cross-platform API for "run thi
 - **Latency Isolation:** LLM summarization takes 5–20s. Asynchronous dispatch + SQS decouples this delay so the Pi returns ticker data to the user immediately.
 - **Alternative (Direct Synchronous Background Task):** If a user explicitly wants to eliminate AWS SQS and Terraform queue resources entirely, the Pi could invoke the AWS Lambda synchronously in an in-process background thread (`InvocationType: RequestResponse`) and receive the payload directly in the return body. This simplifies cloud infrastructure at the cost of losing alerts if the local network drops during execution.
 
-### 4.10 Local Server & Hardware Operations (Raspberry Pi 4 + NVMe)
+### 4.10 Local Server & Hardware Operations (Phase 1 – MVP) (Raspberry Pi 4 + NVMe)
 
 **Responsibility:** Specify the physical host, storage, power, networking, and system-level configurations required to run a reliable 24/7 self-hosted homelab backend on a Raspberry Pi 4.
 

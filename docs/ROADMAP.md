@@ -1,4 +1,4 @@
-# Roadmap
+See the [Engineering Spec](stock-ticker-spec.md) for detailed component‑level information.
 
 This document outlines the phased delivery plan for the Stock Ticker App, derived from the engineering specification in [WIP_stock-ticker-spec.md](file:///Users/melvindisla/Desktop/Repo/Stock-Ticker-App/WIP_stock-ticker-spec.md).
 
@@ -12,12 +12,17 @@ flowchart LR
 
 ---
 
+> **Note:** The full technology stack (FastAPI, Pydantic, httpx, asyncio, Redis‑py, SQLAlchemy, Docker, Docker‑Compose, etc.) is documented in the spec under **Section 3.1 – Technology Stack (Phase 1 – MVP)**.
+
 ## Phase 1: MVP — The Core Self-Hosted Ticker (v1.0)
 >
+> **Spec:** See the [Phase 1 – MVP](stock-ticker-spec.md#phase‑1‑mvp) section for detailed requirements.
+
 > **Primary Milestone:** Reliable, persistent, containerized stock ticker running on Raspberry Pi 4 over LAN with **$0 cloud cost**.
 > **Note:** The bootstrapping and hardening tasks are now part of Phase 1 and are performed by `scripts/hardening.sh`.
 
 - [ ] **Raspberry Pi Hardware & Host OS Hardening:**
+- **Technology Stack (Phase 1 – MVP):** FastAPI, Pydantic, httpx, asyncio, Redis‑py, SQLAlchemy, Docker, Docker‑Compose.
   - **Automated by `scripts/hardening.sh`:**
     - [✅] Verify NTP time synchronization (`systemd-timesyncd`).
     - [✅] Mount NVMe drive permanently at `/mnt/nvme` via `/etc/fstab`; enable weekly TRIM (`fstrim.timer`).
@@ -29,7 +34,7 @@ flowchart LR
     - [✅] Verify official 15.3W USB-C power supply (run `vcgencmd get_throttled` to confirm `0x0` / no under-voltage).
     - [✅] Install active fan cooling or high‑mass aluminum heatsink case (target <65°C under load via `vcgencmd measure_temp`).
     - [ ] Create PostgreSQL storage directory on NVMe mount.
-    - [ ] Connect via Gigabit Ethernet and configure static DHCP reservation on home router.
+    - [ ] Connect via wifi and configure static DHCP reservation on home router.
     - [ ] Configure initial local database backup script (`pg_dump` compressed to `/mnt/nvme/backups/`).
 - [ ] **Containerized Backend (`docker-compose.yml`):**
   - [ ] `api` service: FastAPI + Uvicorn server.
@@ -58,6 +63,8 @@ flowchart LR
 ---
 
 ## Phase 2: Native Desktop Experience & Remote Access (v1.1)
+>
+> **Spec:** See the [Phase 2 – Native Desktop Experience & Remote Access](stock-ticker-spec.md#phase‑2‑native‑desktop‑experience‑remote‑access)
 >
 > **Primary Milestone:** Widget feels like an OS-native application and is reachable securely from outside the home.
 
@@ -110,6 +117,8 @@ flowchart LR
 
 ## Phase 4: Production-Grade DevOps & Observability (v2.5)
 >
+> **Spec:** See the [Phase 4 – DevOps & Observability](stock-ticker-spec.md#phase‑4‑devops‑observability) section
+>
 > **Primary Milestone:** Fully automated zero-touch deploys, log rotation, and proactive alarm notifications.
 
 - [ ] **CI/CD Workflows (GitHub Actions):**
@@ -131,6 +140,8 @@ flowchart LR
 ---
 
 ## Phase 5: All the Bells and Whistles (v3.0+)
+>
+> **Spec:** See the [Phase 5 – Bells & Whistles](stock-ticker-spec.md#phase‑5‑bells‑whistles) section
 >
 > **Primary Milestone:** Multi-ticker tracking, real-time push streams, charting, and mobile notifications.
 
