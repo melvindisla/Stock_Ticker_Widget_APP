@@ -130,20 +130,31 @@ run apt-get install -y htop lm-sensors
 run apt-get install -y postfix
 
 # ---------------------------  SSH hardening  ----------------------
+sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.$(date +%Y%m%d%H%M%S)
+
 SSHD_CONF="/etc/ssh/sshd_config"
-# Change SSH port
-run sed -i '/^Port 22$/d' "$SSHD_CONF"   # remove any old explicit Port 22 line
-run sed -i "s/^#Port .*/Port $SSH_PORT/" "$SSHD_CONF"
-# Ensure the port line exists (in case it was missing)
-run grep -q "^Port $SSH_PORT" "$SSHD_CONF" || run echo "Port $SSH_PORT" >> "$SSHD_CONF"
-# Remove any existing global PasswordAuthentication / PermitRootLogin lines (avoid affecting Match blocks)
-sed -i '/^PasswordAuthentication /d' "$SSHD_CONF"
-sed -i '/^PermitRootLogin /d' "$SSHD_CONF"
-# Append the hardened settings at the end of the file
-printf '\nPasswordAuthentication no\nPermitRootLogin no\n' >>"$SSHD_CONF"
-run systemctl restart ssh
-# Prevent password login for the pi account
-run passwd -l pi >/dev/null 2>&1 || true
+
+# 2. Remove existing directives (active or commented) to avoid duplicates/conflicts
+sudo sed -i -E '/^[#[:space:]]*Port[[:space:]]+/Id' /etc/ssh/sshd_config
+sudo sed -i -E '/^[#[:space:]]*PermitRootLogin[[:space:]]+/Id' /etc/ssh/sshd_config
+sudo sed -i -E '/^[#[:space:]]*PasswordAuthentication[[:space:]]+/Id' /etc/ssh/sshd_config
+sudo sed -i -E '/^[#[:space:]]*PubkeyAuthentication[[:space:]]+/Id' /etc/ssh/sshd_config
+sudo sed -i -E '/^[#[:space:]]*AllowUsers[[:space:]]+/Id' /etc/ssh/sshd_config
+
+# 3. Append the desired settings
+sudo bash -c 'cat >> /etc/ssh/sshd_config <<EOF
+Port 2222
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+AllowUsers sysadmin
+EOF'
+
+# 4. Check for conflicting Port/other directives in drop-in files
+sudo grep -rn "^[[:space:]]*\(Port\|PermitRootLogin\|PasswordAuthentication\|AllowUsers\)" /etc/ssh/sshd_config.d/ 2>/dev/null
+
+# 5. Validate syntax
+sudo sshd -t && echo "Syntax OK"
 
 # ----------------------------------------------------------------------
 # Create a non‑root admin user that reuses the existing SSH public key
