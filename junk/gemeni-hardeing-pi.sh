@@ -57,7 +57,7 @@ declare API_PORT=8000                # FastAPI API container port per spec (§4.
 declare SSH_CIDR="192.168.0.0/16"    # Default LAN CIDR allowed for SSH
 declare API_CIDR="192.168.0.0/16"    # Default LAN CIDR allowed for API
 declare ADMIN_USER=""                # Target admin user (auto-detected if blank)
-declare NVME_DEVICE=""               # Explicit NVMe partition (auto-detected if blank)
+
 declare DRY_RUN="false"              # Preview mode
 declare SKIP_DOCKER="false"          # Skip Docker Engine & Compose installation
 declare FORCE_UNSUPPORTED="false"    # Bypass Raspberry Pi 4 / OS checks
@@ -209,7 +209,7 @@ while [[ $# -gt 0 ]]; do
         --admin-user)
             ADMIN_USER="${2:?Error: --admin-user requires a username argument}"; shift 2 ;;
         --nvme-device)
-            NVME_DEVICE="${2:?Error: --nvme-device requires a device path argument}"; shift 2 ;;
+            ;
         --dry-run)
             DRY_RUN="true"; shift ;;
         --no-docker)
@@ -500,57 +500,21 @@ if command -v timedatectl >/dev/null 2>&1; then
 fi
 success "NTP time synchronization service enabled."
 
-# ---------- NVMe Storage Architecture & TRIM (Spec §4.10 item 3) --------------
-log "Configuring NVMe storage, fstab mount, and TRIM..."
+# NVMe handling completely removed – all related sections omitted
+# NVMe handling block removed – all NVMe related code omitted
 
-NVME_MOUNT="/mnt/nvme"
-FSTAB_FILE="/etc/fstab"
-ROOT_SOURCE=$(findmnt -nro SOURCE / || true)
+# (NVMe block removed)
 
-# Identify NVMe block device if not passed explicitly
-if [[ -z "$NVME_DEVICE" ]]; then
-    NVME_DEVICE=$(lsblk -pnro PATH,TYPE | awk '$2 == "part" && $1 ~ /nvme/ {print $1; exit}' || true)
-fi
+
 
 # Check if Pi booted directly from NVMe (Direct NVMe Boot: BOOT_ORDER=0xf41)
 if [[ "$ROOT_SOURCE" =~ /dev/nvme ]]; then
     success "Direct NVMe Boot detected: Root filesystem (/) is already running from NVMe NAND flash (${ROOT_SOURCE})."
     # Ensure /mnt/nvme directory exists on the NVMe filesystem
-    run mkdir -p "$NVME_MOUNT"
+    # NVMe directory creation removed
 else
     # Auxiliary NVMe drive scenario
-    if [[ -n "$NVME_DEVICE" && -b "$NVME_DEVICE" ]]; then
-        log "Found NVMe auxiliary partition: ${NVME_DEVICE}"
-        FS_TYPE=$(blkid -s TYPE -o value "$NVME_DEVICE" 2>/dev/null || echo "unknown")
-        UUID=$(blkid -s UUID -o value "$NVME_DEVICE" 2>/dev/null || echo "")
-
-        if [[ "$FS_TYPE" != "ext4" ]]; then
-            warn "NVMe device ${NVME_DEVICE} has filesystem '${FS_TYPE}', expected 'ext4'. Skipping automated mount."
-        elif [[ -z "$UUID" ]]; then
-            warn "Could not retrieve UUID for ${NVME_DEVICE}. Skipping fstab update."
-        else
-            # Backup fstab
-            run cp -a "$FSTAB_FILE" "${FSTAB_FILE}.bak.${BACKUP_TIMESTAMP}"
-            FSTAB_ENTRY="UUID=${UUID}  ${NVME_MOUNT}  ext4  defaults,noatime  0  2"
-
-            if ! grep -qs "[[:space:]]${NVME_MOUNT}[[:space:]]" /proc/mounts; then
-                if ! grep -qF "UUID=${UUID}" "$FSTAB_FILE"; then
-                    log "Adding NVMe mount entry to ${FSTAB_FILE}: ${FSTAB_ENTRY}"
-                    if [[ "$DRY_RUN" == "true" ]]; then
-                        log "[DRY-RUN] Would append fstab entry: ${FSTAB_ENTRY}"
-                    else
-                        printf '%s\n' "$FSTAB_ENTRY" >> "$FSTAB_FILE"
-                    fi
-                fi
-                run mkdir -p "$NVME_MOUNT"
-                run mount "$NVME_MOUNT" || warn "Mount of ${NVME_MOUNT} failed; verify filesystem."
-            fi
-            success "NVMe mounted at ${NVME_MOUNT} (UUID=${UUID})."
-        fi
-    else
-        log "No separate auxiliary NVMe partition detected for dedicated mount. Ensuring ${NVME_MOUNT} directory exists."
-        run mkdir -p "$NVME_MOUNT"
-    fi
+# NVMe handling logic removed
 fi
 
 # Verify UASP and TRIM discard capability
@@ -578,7 +542,7 @@ success "TRIM maintenance active via fstrim.timer and ${CRON_WEEKLY_TRIM}."
 
 # ---------- PostgreSQL Directory Layout (Spec §4.6, §4.7, ROADMAP) ------------
 log "Creating PostgreSQL persistent storage directory on NVMe..."
-PG_DATA_DIR="${NVME_MOUNT}/postgres/data"
+PG_DATA_DIR="/var/lib/postgresql/data"
 run mkdir -p "$PG_DATA_DIR"
 # Docker Postgres official container runs as uid 999
 run chmod 700 "$PG_DATA_DIR"
@@ -587,7 +551,7 @@ success "PostgreSQL NVMe storage directory prepared: ${PG_DATA_DIR}"
 # ---------- Database Backup Script & Cron Job (Spec §4.10 item 7) -------------
 if [[ "$SKIP_BACKUP_CRON" != "true" ]]; then
     log "Setting up automated local PostgreSQL backup script and cron job..."
-    BACKUP_DIR="${NVME_MOUNT}/backups"
+    BACKUP_DIR="/var/backups"
     BACKUP_SCRIPT="${BACKUP_DIR}/backup-postgres.sh"
     run mkdir -p "$BACKUP_DIR"
     run chmod 700 "$BACKUP_DIR"
@@ -797,9 +761,9 @@ ${CLR_BOLD}Security & Access Control:${CLR_RESET}
 
 ${CLR_BOLD}Storage & Reliability:${CLR_RESET}
   • Time Sync (NTP):     systemd-timesyncd active (RTC limitation mitigated)
-  • NVMe Storage:        ${NVME_MOUNT}
+# NVMe storage summary removed
   • Postgres Directory:  ${PG_DATA_DIR} (Permissions: 700)
-  • Local Backups:       ${NVME_MOUNT}/backups (Daily cron at 03:00 AM -> backup-postgres)
+# NVMe backups summary removed
   • Weekly TRIM:         fstrim.timer & /etc/cron.weekly/fstrim enabled
 
 ${CLR_BOLD}Docker Infrastructure:${CLR_RESET}

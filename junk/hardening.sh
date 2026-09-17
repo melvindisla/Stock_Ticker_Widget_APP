@@ -65,7 +65,7 @@ declare SSH_PORT=2222
 declare API_PORT=8000                 # Port the API container will expose
 declare SSH_CIDR="192.168.0.0/16"     # Allowed CIDR for SSH
 declare API_CIDR="192.168.0.0/16"     # Allowed CIDR for the API
-declare NVME_DEVICE=""                # Explicit device, e.g. /dev/nvme0n1p2
+
 declare DRY_RUN="false"
 declare SKIP_DOCKER="false"
 declare FORCE_UNSUPPORTED="false"
@@ -78,7 +78,7 @@ while [[ $# -gt 0 ]]; do
         --api-port)         API_PORT="${2:?missing value}"; shift 2 ;;
         --allow-ssh-from)   SSH_CIDR="${2:?missing value}"; shift 2 ;;
         --allow-api-from)   API_CIDR="${2:?missing value}"; shift 2 ;;
-        --nvme-device)      NVME_DEVICE="${2:?missing value}"; shift 2 ;;
+
         --dry-run)          DRY_RUN="true"; shift ;;
         --no-docker)        SKIP_DOCKER="true"; shift ;;
         --force-unsupported) FORCE_UNSUPPORTED="true"; shift ;;
@@ -90,7 +90,7 @@ Usage: $PROG_NAME [options]
     --api-port <port>          Port to open for the API (default: 8000)
     --allow-ssh-from <cidr>    CIDR range allowed to SSH (default: 192.168.0.0/16)
     --allow-api-from <cidr>    CIDR range allowed to access the API
-    --nvme-device <device>     Existing filesystem device to mount at /mnt/nvme
+
     --dry-run_sudo             Show actions without executing them
     --no-docker                Skip Docker installation
     --force-unsupported        Continue on non‑Raspberry Pi 4 / non‑Trixie systems
@@ -199,11 +199,11 @@ fi
 if [[ "$DRY_RUN" == "true" ]]; then
     log "[DRY‑RUN] write /etc/fail2ban/jail.d/ssh.conf for port $SSH_PORT"
 else
-    cat > /etc/fail2ban/jail.d/ssh.conf <<'EOF'
+    cat > /etc/fail2ban/jail.d/ssh.conf <<EOF
 [sshd]
 enabled = true
 port = $SSH_PORT
-logpath = %(sshd_log)s
+logpath = \%(sshd_log)s
 maxretry = 5
 bantime = 3600
 EOF
@@ -234,37 +234,7 @@ done
 # ---------------------------  NTP sync  ---------------------------
 run_sudo systemctl enable --now systemd-timesyncd
 
-# ---------------------------  NVMe mount & TRIM  -----------------
-if [[ -z "$NVME_DEVICE" ]]; then
-    NVME_DEVICE=$(lsblk -pnro PATH,TYPE | awk '$2 == "part" && $1 ~ /nvme/ {print $1; exit}')
-fi
-if [[ -n "$NVME_DEVICE" ]]; then
-    [[ -b "$NVME_DEVICE" ]] || die "NVMe device is not a block device: $NVME_DEVICE"
-    ROOT_SOURCE=$(findmnt -nro SOURCE /)
-    [[ "$NVME_DEVICE" != "$ROOT_SOURCE" ]] || die "Refusing to mount the root device as NVMe data storage"
-    MOUNTPOINT="/mnt/nvme"
-    FILESYSTEM=$(blkid -s TYPE -o value "$NVME_DEVICE" 2>/dev/null || true)
-    [[ "$FILESYSTEM" == "ext4" ]] || die "$NVME_DEVICE is not an existing ext4 filesystem"
-    UUID=$(blkid -s UUID -o value "$NVME_DEVICE")
-    FSTAB_LINE="UUID=$UUID  $MOUNTPOINT  ext4  defaults,noatime  0  2"
-    if ! grep -qs "[[:space:]]${MOUNTPOINT}[[:space:]]" /proc/mounts; then
-        if ! grep -qF "UUID=$UUID" /etc/fstab; then
-            if [[ "$DRY_RUN" == "true" ]]; then
-                log "[DRY‑RUN] append $FSTAB_LINE to /etc/fstab"
-            else
-                printf '%s\n' "$FSTAB_LINE" >>/etc/fstab
-            fi
-        fi
-        run_sudo mkdir -p "$MOUNTPOINT"
-        run_sudo mount "$MOUNTPOINT"
-    fi
-    if [[ "$DRY_RUN" != "true" ]]; then
-        mount -a --fake
-    fi
-    run_sudo systemctl enable --now fstrim.timer
-else
-    log "NVMe device not detected; skipping mount and TRIM steps"
-fi
+
 
 # ---------------------------  Docker (optional)  -----------------
 if [[ "$SKIP_DOCKER" != "true" ]]; then
