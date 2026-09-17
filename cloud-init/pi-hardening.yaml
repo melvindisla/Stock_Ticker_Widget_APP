@@ -1,0 +1,201 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - ufw
+  - openssh-server
+  - docker.io
+  - fail2ban
+  - unattended-upgrades
+  - jq
+  - gawk
+  - netplan.io
+  - wpasupplicant
+  - curl
+  - bc
+  - iproute2
+  - iputils-ping
+  - wireless-tools
+  - rfkill
+  - usbutils
+  - git
+  - build-essential
+  - dkms
+  - linux-headers-$(uname -r)
+  - make
+  - gcc
+
+write_files:
+  # SSH hardening – replace managed directives and append new config
+  - path: /etc/ssh/sshd_config
+    permissions: "0644"
+    owner: root:root
+    content: |
+      # Managed by cloud‑init hardening
+      Port 2222
+      PermitRootLogin no
+      PasswordAuthentication no
+      PubkeyAuthentication yes
+      AllowUsers sysadmin
+
+  # Fail2Ban SSH jail (uses the same port as SSH)
+  - path: /etc/fail2ban/jail.d/ssh.conf
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [sshd]
+      enabled = true
+      port = 2222
+      logpath = %(sshd_log)s
+      maxretry = 5
+      bantime = 3600
+
+  # Unattended‑upgrade config – security only
+  - path: /etc/apt/apt.conf.d/52-hardening-unattended-upgrades
+    permissions: "0644"
+    owner: root:root
+    content: |
+      Unattended-Upgrade::Allowed-Origins {
+          "${DISTRIB_ID}:${DISTRIB_CODENAME}-security";
+      };
+
+  # Docker daemon JSON – limit log size
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    owner: root:root
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      }
+
+  # NVMe mount entry – will be filled later if device detected
+  - path: /etc/fstab
+    append: true
+    permissions: "0644"
+    owner: root:root
+    content: |
+      # NVMe mount (added by cloud‑init if device present)
+
+runcmd:
+  # -------------------------------------------------------------------
+  # 1. Basic system checks & create admin user (sysadmin) if missing
+  - |
+    if ! id -u sysadmin >/dev/null 2>&1; then
+      useradd -m -s /bin/bash sysadmin || true
+    fi
+    mkdir -p /home/sysadmin/.ssh
+    chmod 700 /home/sysadmin/.ssh
+    # If an authorized_keys file exists in /home/pi, copy it for sysadmin
+    if [ -s /home/pi/.ssh/authorized_keys ]; then
+      cp /home/pi/.ssh/authorized_keys /home/sysadmin/.ssh/authorized_keys
+      chown sysadmin:sysadmin /home/sysadmin/.ssh/authorized_keys
+      chmod 600 /home/sysadmin/.ssh/authorized_keys
+    fi
+    usermod -aG sudo sysadmin
+  # -------------------------------------------------------------------
+  # 2. Enable UFW and apply rules
+  - |
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow from 192.168.0.0/16 to any port 2222 proto tcp
+    ufw allow from 192.168.0.0/16 to any port 8000 proto tcp
+    ufw --force enable
+  # -------------------------------------------------------------------
+  # 3. Reload SSH daemon with new config
+  - |
+    sshd -t || { echo "Invalid sshd_config"; exit 1; }
+    systemctl reload ssh || systemctl reload sshd
+  # -------------------------------------------------------------------
+  # 4. Restart Fail2Ban
+  - systemctl restart fail2ban
+  # -------------------------------------------------------------------
+  # 5. Enable unattended upgrades
+  - systemctl enable --now unattended-upgrades
+  # -------------------------------------------------------------------
+  # 6. Install Docker (if not already present) – use official script
+  - |
+    if ! command -v docker >/dev/null 2>&1; then
+      curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+      sh /tmp/get-docker.sh
+      rm -f /tmp/get-docker.sh
+    fi
+    usermod -aG docker sysadmin
+    systemctl enable --now docker
+  # -------------------------------------------------------------------
+  # 7. Compile & install 8821CU Wi‑Fi driver (if dongle present)
+  - |
+    timeout=300
+    elapsed=0
+    while ! lsusb | grep -i "Realtek" | grep -i "8821cu"; do
+      sleep 5
+      elapsed=$((elapsed+5))
+      if [ $elapsed -ge $timeout ]; then
+        echo "8821CU dongle not detected – skipping driver install"
+        exit 0
+      fi
+    done
+    DRIVER_DIR="/usr/src/8821cu-20210916"
+    if [ ! -d "$DRIVER_DIR" ]; then
+      git clone https://github.com/morrownr/8821cu-20210916.git "$DRIVER_DIR"
+      (cd "$DRIVER_DIR" && make && make install && dkms add -m 8821cu -v 20210916 && dkms install -m 8821cu -v 20210916)
+    fi
+    echo "8821cu" > /etc/modules-load.d/8821cu.conf
+    modprobe 8821cu
+  # -------------------------------------------------------------------
+  # 8. Bring up the new Wi‑Fi interface, connect to saved network (nmcli)
+  - |
+    # Wait for the interface to appear (max 60s)
+    iface=""
+    for i in $(seq 1 12); do
+      iface=$(nmcli device status | awk '/8821cu/ {print $1}')
+      [ -n "$iface" ] && break
+      sleep 5
+    done
+    if [ -z "$iface" ]; then
+      echo "Wi‑Fi interface not found – abort"
+      exit 0
+    fi
+    # Assume a saved connection profile exists; otherwise bring interface up
+    nmcli device set "$iface" managed yes
+    nmcli device connect "$iface" || true
+    # Verify connectivity (ping Google)
+    ping -c 3 8.8.8.8 || true
+  # -------------------------------------------------------------------
+  # 9. Disable internal Wi‑Fi (if present) – block wlan0
+  - |
+    rfkill block wlan0 || true
+  # -------------------------------------------------------------------
+  # 10. NVMe detection & mount (optional)
+  - |
+    NVME=$(lsblk -pnro NAME,TYPE | awk '$2=="part" && $1~"nvme"{print $1; exit}')
+    if [ -n "$NVME" ]; then
+      # Ensure it is not the root device
+      ROOT=$(findmnt -nro SOURCE /)
+      if [ "$NVME" != "$ROOT" ]; then
+        UUID=$(blkid -s UUID -o value "$NVME")
+        FS=$(blkid -s TYPE -o value "$NVME")
+        if [ "$FS" = "ext4" ]; then
+          MOUNTPOINT="/mnt/nvme"
+          mkdir -p "$MOUNTPOINT"
+          grep -q "${MOUNTPOINT}" /etc/fstab || echo "UUID=${UUID}  ${MOUNTPOINT}  ext4  defaults,noatime  0  2" >> /etc/fstab
+          mount "$MOUNTPOINT"
+          systemctl enable --now fstrim.timer
+        fi
+      fi
+    fi
+  # -------------------------------------------------------------------
+  # 11. Final verification summary (logs to /var/log/pi-hardening.log)
+  - |
+    {
+      echo "--- Verification Summary ---"
+      ufw status verbose
+      systemctl is-active fail2ban || true
+      systemctl is-active docker || true
+      docker info || true
+      ip a | grep -i 8821cu || true
+      cat /etc/ssh/sshd_config | grep -E '^(Port|PermitRootLogin|PasswordAuthentication|PubkeyAuthentication|AllowUsers)'
+    } >> /var/log/pi-hardening.log 2>&1
