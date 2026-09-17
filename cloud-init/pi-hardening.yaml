@@ -173,19 +173,23 @@ runcmd:
   - |
     NVME=$(lsblk -pnro NAME,TYPE | awk '$2=="part" && $1~"nvme"{print $1; exit}')
     if [ -n "$NVME" ]; then
-      # Ensure it is not the root device
-      ROOT=$(findmnt -nro SOURCE /)
-      if [ "$NVME" != "$ROOT" ]; then
-        UUID=$(blkid -s UUID -o value "$NVME")
-        FS=$(blkid -s TYPE -o value "$NVME")
-        if [ "$FS" = "ext4" ]; then
-          MOUNTPOINT="/mnt/nvme"
-          mkdir -p "$MOUNTPOINT"
-          grep -q "${MOUNTPOINT}" /etc/fstab || echo "UUID=${UUID}  ${MOUNTPOINT}  ext4  defaults,noatime  0  2" >> /etc/fstab
-          mount "$MOUNTPOINT"
-          systemctl enable --now fstrim.timer
-        fi
+    # Skip mounting if the detected NVMe is the boot/root filesystem
+    ROOT=$(findmnt -n -o SOURCE /)
+    if [ "$NVME" != "$ROOT" ]; then
+      UUID=$(blkid -s UUID -o value "$NVME")
+      FS=$(blkid -s TYPE -o value "$NVME")
+      if [ "$FS" = "ext4" ]; then
+        MOUNTPOINT="/mnt/nvme"
+        mkdir -p "$MOUNTPOINT"
+        grep -q "${MOUNTPOINT}" /etc/fstab || echo "UUID=${UUID}  ${MOUNTPOINT}  ext4  defaults,noatime  0  2" >> /etc/fstab
+        mount "$MOUNTPOINT"
+        systemctl enable --now fstrim.timer
       fi
+    else
+      echo "NVMe $NVME is the root filesystem – skipping extra mount."
+      # Run immediate trim on the root NVMe
+      fstrim -av || true
+    fi
     fi
   # -------------------------------------------------------------------
   # 11. Final verification summary (logs to /var/log/pi-hardening.log)
