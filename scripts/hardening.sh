@@ -1,4 +1,288 @@
 #!/usr/bin/env bash
+
+# ----------------------------------------------------------------------
+# hardening.sh – Raspberry Pi OS (64‑bit) hardening & initial setup
+# ----------------------------------------------------------------------
+# This script is designed to be run non‑interactively (e.g. CI/CD, provisioning)
+# It is idempotent – safe to run multiple times.
+# ----------------------------------------------------------------------
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# ---------- Logging helpers ------------------------------------------------
+log()    { printf '[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*"; }
+error()  { printf '[%s] ERROR: %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
+ die()    { error "$*"; exit 1; }
+
+# ----------- Command availability ----------------------------------------
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+# ----------- Argument defaults --------------------------------------------
+declare -r PROG_NAME="${0##*/}"
+declare -i SUCCESS_COUNT=0 FAILURE_COUNT=0
+declare -a FAILED_CMDS=()
+
+# Default configuration – can be overridden via CLI arguments
+declare SSH_PORT=2222            # SSH listening port
+declare API_PORT=8000            # API container port
+declare SSH_CIDR="192.168.0.0/16"   # CIDR allowed to SSH
+declare API_CIDR="192.168.0.0/16"   # CIDR allowed to reach API
+   # Non‑root admin user
+declare NVME_DEVICE=""          # Optional NVMe device (e.g. /dev/nvme0n1p2)
+declare DRY_RUN="false"         # Set to "true" for preview only
+declare SKIP_DOCKER="false"     # Skip Docker installation
+declare FORCE_UNSUPPORTED="false" # Bypass model/OS checks
+
+# ---------- Argument parsing --------------------------------------------
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ssh-port)          SSH_PORT="${2:?missing value}"; shift 2;;
+        --api-port)          API_PORT="${2:?missing value}"; shift 2;;
+        --allow-ssh-from)    SSH_CIDR="${2:?missing value}"; shift 2;;
+        --allow-api-from)    API_CIDR="${2:?missing value}"; shift 2;;
+        --admin-user)        ADMIN_USER="${2:?missing value}"; shift 2;;
+        --nvme-device)       NVME_DEVICE="${2:?missing value}"; shift 2;;
+        --dry-run)           DRY_RUN="true"; shift;;
+        --no-docker)         SKIP_DOCKER="true"; shift;;
+        --force-unsupported) FORCE_UNSUPPORTED="true"; shift;;
+        -h|--help)
+            cat <<'EOF'
+Usage: $PROG_NAME [options]
+  --ssh-port <port>          SSH port (default: 2222)
+  --api-port <port>          API container port (default: 8000)
+  --allow-ssh-from <cidr>    CIDR allowed to SSH (default: 192.168.0.0/16)
+  --allow-api-from <cidr>    CIDR allowed to reach API (default: 192.168.0.0/16)
+  --admin-user <name>        Non‑root admin user (default: sysadmin)
+  --nvme-device <device>     NVMe device to mount (optional)
+  --dry-run                  Preview actions without applying them
+  --no-docker                Skip Docker installation
+  --force-unsupported        Bypass Raspberry‑Pi‑4 / Trixie checks
+  -h, --help                 Show this help message
+EOF
+            exit 0;;
+        *) error "Unknown option: $1"; exit 1;;
+    esac
+done
+
+# ---------- Basic validation ---------------------------------------------
+validate_port() { [[ $1 =~ ^[0-9]+$ ]] && (( 1 <= 10#$1 && 10#$1 <= 65535 )) || die "Invalid port: $1"; }
+validate_cidr() { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] || die "Invalid CIDR: $1"; }
+validate_port "$SSH_PORT"; validate_port "$API_PORT"
+validate_cidr "$SSH_CIDR"; validate_cidr "$API_CIDR"
+[[ $ADMIN_USER =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "Invalid admin username: $ADMIN_USER"
+
+# ---------- Ensure we are root ------------------------------------------
+if [[ $EUID -ne 0 ]]; then
+    die "This script must be run as root (e.g. sudo $PROG_NAME)"
+fi
+
+# ---------- Ensure required commands are present ------------------------
+for cmd in awk grep mount sed apt-get systemctl; do
+    require_command "$cmd"
+done
+
+# ---------- Helper to run commands (dry‑run aware) --------------------
+run() {
+    if [[ $DRY_RUN == "true" ]]; then
+        log "[DRY‑RUN] $*"
+        ((SUCCESS_COUNT++))
+    else
+        log "Executing: $*"
+        if "$@"; then
+            ((SUCCESS_COUNT++))
+        else
+            log "Command failed: $*"
+            ((FAILURE_COUNT++))
+            FAILED_CMDS+=("$(printf '%q ' "$@")")
+            return 1
+        fi
+    fi
+}
+
+# ---------- System update ------------------------------------------------
+run apt-get update -y
+run apt-get upgrade -y
+
+# ---------- Install core packages ---------------------------------------
+run apt-get install -y --no-install-recommends \
+    wpasupplicant netplan.io git python3 python3-pip openssl \
+    iptables-persistent htop lm-sensors curl ca-certificates \
+    openssh-server ufw fail2ban unattended-upgrades jq
+
+# ---------- Create admin user & copy SSH key -----------------------------
+if ! id -u "$ADMIN_USER" >/dev/null 2>&1; then
+    run adduser --disabled-password --gecos "" "$ADMIN_USER"
+fi
+# Ensure we have a public key to copy – abort otherwise
+if [[ ! -s "/home/pi/.ssh/authorized_keys" && ! -s "/home/$ADMIN_USER/.ssh/authorized_keys" ]]; then
+    die "No authorized SSH key found for $ADMIN_USER; aborting"
+fi
+if [[ ! -s "/home/$ADMIN_USER/.ssh/authorized_keys" && $DRY_RUN != "true" ]]; then
+    run install -d -m 700 -o "$ADMIN_USER" -g "$ADMIN_USER" "/home/$ADMIN_USER/.ssh"
+    run install -m 600 -o "$ADMIN_USER" -g "$ADMIN_USER" \
+        "/home/pi/.ssh/authorized_keys" "/home/$ADMIN_USER/.ssh/authorized_keys"
+fi
+run usermod -aG sudo "$ADMIN_USER"
+
+# ---------- Firewall (ufw) ---------------------------------------------
+run ufw default deny incoming
+run ufw default allow outgoing
+run ufw allow from "$SSH_CIDR" to any port "$SSH_PORT" proto tcp
+run ufw allow from "$API_CIDR" to any port "$API_PORT" proto tcp
+if ufw status | grep -q '^Status: inactive'; then
+    run ufw --force enable
+fi
+
+# ---------- SSH hardening -----------------------------------------------
+SSHD_CONF="/etc/ssh/sshd_config"
+run cp -a "$SSHD_CONF" "${SSHD_CONF}.bak.$(date +%Y%m%d%H%M%S)"
+# Remove any previously managed directives
+sed -i -E '/^[#[:space:]]*Port[[:space:]]+/d' "$SSHD_CONF"
+sed -i -E '/^[#[:space:]]*PermitRootLogin[[:space:]]+/d' "$SSHD_CONF"
+sed -i -E '/^[#[:space:]]*PasswordAuthentication[[:space:]]+/d' "$SSHD_CONF"
+sed -i -E '/^[#[:space:]]*PubkeyAuthentication[[:space:]]+/d' "$SSHD_CONF"
+sed -i -E '/^[#[:space:]]*AllowUsers[[:space:]]+/d' "$SSHD_CONF"
+if [[ $DRY_RUN == "true" ]]; then
+    log "[DRY‑RUN] would append SSH settings to $SSHD_CONF"
+else
+    printf '\n# Managed by %s\nPort %s\nPermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nAllowUsers %s\n' \
+        "$PROG_NAME" "$SSH_PORT" "$ADMIN_USER" >> "$SSHD_CONF"
+fi
+run sshd -t
+if systemctl list-unit-files ssh.service >/dev/null 2>&1; then
+    run systemctl reload ssh
+else
+    run systemctl reload sshd
+fi
+
+# ---------- Firewall (ufw) ---------------------------------------------
+run ufw default deny incoming
+run ufw default allow outgoing
+run ufw allow from "$SSH_CIDR" to any port "$SSH_PORT" proto tcp
+run ufw allow from "$API_CIDR" to any port "$API_PORT" proto tcp
+if ufw status | grep -q '^Status: inactive'; then
+    run ufw --force enable
+fi
+
+# ---------- Fail2Ban (SSH jail) ---------------------------------------
+if [[ $DRY_RUN == "true" ]]; then
+    log "[DRY‑RUN] would write /etc/fail2ban/jail.d/ssh.conf (port $SSH_PORT)"
+else
+    cat > /etc/fail2ban/jail.d/ssh.conf <<EOF
+[sshd]
+enabled = true
+port = $SSH_PORT
+logpath = %(sshd_log)s
+maxretry = 5
+bantime = 3600
+EOF
+fi
+run systemctl restart fail2ban
+
+# ---------- Unattended upgrades ----------------------------------------
+cat > /etc/apt/apt.conf.d/52-hardening-unattended-upgrades <<EOF
+Unattended-Upgrade::Allowed-Origins {
+    "${DISTRIB_ID}:${DISTRIB_CODENAME}-security";
+};
+EOF
+run systemctl enable --now unattended-upgrades
+
+# ---------- Disable unneeded services -----------------------------------
+for svc in avahi-daemon bluetooth triggerhappy; do
+    if systemctl is-active --quiet "$svc" || systemctl is-enabled --quiet "$svc"; then
+        run systemctl disable --now "$svc"
+    fi
+done
+
+# ---------- Enable NTP -------------------------------------------------
+run systemctl enable --now systemd-timesyncd
+
+# ---------- NVMe mount & weekly fstrim ----------------------------------
+if [[ -z "$NVME_DEVICE" ]]; then
+    NVME_DEVICE=$(lsblk -pnro PATH,TYPE | awk '$2 == "part" && $1 ~ /nvme/ {print $1; exit}')
+fi
+if [[ -n "$NVME_DEVICE" ]]; then
+    [[ -b "$NVME_DEVICE" ]] || die "NVMe device $NVME_DEVICE is not a block device"
+    ROOT_SOURCE=$(findmnt -nro SOURCE /)
+    [[ "$NVME_DEVICE" != "$ROOT_SOURCE" ]] || die "NVMe device is the root filesystem"
+    MOUNTPOINT="/mnt/nvme"
+    UUID=$(blkid -s UUID -o value "$NVME_DEVICE")
+    [[ $(blkid -s TYPE -o value "$NVME_DEVICE") == "ext4" ]] || die "NVMe $NVME_DEVICE is not ext4"
+    if ! grep -qs "[[:space:]]${MOUNTPOINT}[[:space:]]" /proc/mounts; then
+        if ! grep -qF "UUID=$UUID" /etc/fstab; then
+            printf 'UUID=%s  %s  ext4  defaults,noatime  0  2\n' "$UUID" "$MOUNTPOINT" >> /etc/fstab
+        fi
+        run mkdir -p "$MOUNTPOINT"
+        run mount "$MOUNTPOINT"
+    fi
+    run systemctl enable --now fstrim.timer
+fi
+
+# ---------- Docker (optional) ------------------------------------------
+if [[ $SKIP_DOCKER != "true" ]]; then
+    if ! command -v docker >/dev/null 2>&1; then
+        run curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+        run sh /tmp/get-docker.sh
+        run rm -f /tmp/get-docker.sh
+    fi
+    run usermod -aG docker "$ADMIN_USER"
+    run apt-get install -y docker-compose-plugin
+    # Configure daemon logging limits
+    DAEMON_CONF="/etc/docker/daemon.json"
+    if [[ -f $DAEMON_CONF ]]; then
+        jq '. + {"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}' "$DAEMON_CONF" > "${DAEMON_CONF}.tmp"
+        run mv "${DAEMON_CONF}.tmp" "$DAEMON_CONF"
+    else
+        install -d -m 755 /etc/docker
+        cat > "$DAEMON_CONF" <<'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+    fi
+    run systemctl enable --now docker
+    run systemctl restart docker
+fi
+
+# ---------- Secure .env files -------------------------------------------
+for env_file in "/home/pi/.env" "/home/$ADMIN_USER/.env"; do
+    [[ -f $env_file ]] && run chmod 600 "$env_file"
+done
+
+# ---------- Hardware‑health cron ---------------------------------------
+cat > /etc/cron.d/pi-health <<'EOF'
+# Daily hardware‑health logging – 02:30
+30 2 * * * root /usr/bin/vcgencmd get_throttled >> /var/log/pi-health.log 2>&1
+30 2 * * * root /usr/bin/vcgencmd measure_temp   >> /var/log/pi-health.log 2>&1
+EOF
+run chmod 644 /etc/cron.d/pi-health
+run touch /var/log/pi-health.log
+run chmod 640 /var/log/pi-health.log
+
+# ---------- Verification summary ---------------------------------------
+log "=== Verification Summary ==="
+run ufw status verbose
+command -v docker >/dev/null && run docker info
+run systemctl is-active fail2ban
+run grep -E '^(Port|PasswordAuthentication|PermitRootLogin|PubkeyAuthentication|AllowUsers) ' "$SSHD_CONF"
+log "=== Execution Summary ==="
+log "Successful commands: $SUCCESS_COUNT"
+log "Failed commands: $FAILURE_COUNT"
+if (( FAILURE_COUNT > 0 )); then
+    log "Failed command list:"
+    for cmd in "${FAILED_CMDS[@]}"; do
+        log "  - $cmd"
+    done
+fi
+log "Hardening script completed."
+
 # ----------------------------------------------------------------------
 # hardening.sh – Raspberry Pi OS (64-bit) hardening & initial setup
 # ----------------------------------------------------------------------
@@ -18,34 +302,53 @@
 #   • Dry-run mode for preview
 # ----------------------------------------------------------------------
 
-set -u -o pipefail
+set -Eeuo pipefail
 IFS=$'\n\t'
 
 # ---------------------------  Helpers  ------------------------------
 log()    { printf '[%s] %s\n' "$(date +"%Y-%m-%d %H:%M:%S")" "$*"; }
-error()  { printf '[%s] ERROR: %s\n' "$(date +"%Y-%m-%d %H:%M:%S")" "$*" >&2; }
+error() { printf '[%s] ERROR: %s
+' "$(date +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
+
+ die() { error "$*"; exit 1; }
+
+ on_error() {
+    local exit_code=$?
+    error "Failed at line ${BASH_LINENO[0]}: ${BASH_COMMAND}"
+    exit "$exit_code"
+ }
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+validate_port() {
+    if ! [[ "$1" =~ ^[0-9]+$ ]] || ! (( 1 <= 10#$1 && 10#$1 <= 65535 )); then
+        die "Invalid port: $1"
+    fi
+}
+
+validate_cidr() {
+    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] || die "Invalid IPv4 CIDR: $1"
+}
+
 run() {
     if [[ "$DRY_RUN" == "true" ]]; then
-        log "[DRY-RUN] $*"
-        ((SUCCESS_COUNT++))
+        printf '[DRY-RUN]'
+        printf ' %q' "$@"
+        printf '\n'
+        ((SUCCESS_COUNT += 1))
     else
         log "Executing: $*"
         if "$@"; then
             log "SUCCESS: $*"
-            ((SUCCESS_COUNT++))
+            ((SUCCESS_COUNT += 1))
         else
             log "FAILURE: $*"
-            ((FAILURE_COUNT++))
-            FAILED_CMDS+=("$*")
+            ((FAILURE_COUNT += 1))
+            FAILED_CMDS+=("$(printf '%q ' "$@")")
+            return 1
         fi
-    fi
-}
-ensure_line_in_file() {
-    local file=$1 regex=$2 line=$3
-    if grep -qE "$regex" "$file"; then
-        sed -i -E "s|$regex.*|$line|" "$file"
-    else
-        echo "$line" >>"$file"
     fi
 }
 
@@ -55,26 +358,42 @@ declare -i SUCCESS_COUNT=0
 declare -i FAILURE_COUNT=0
 declare -a FAILED_CMDS=()
 declare SSH_PORT=2222
+# Recommendation: run the script with --dry-run first to preview changes without affecting the system
 declare API_PORT=8000                 # Port the API container will expose
 declare SSH_CIDR="192.168.0.0/16"     # Allowed CIDR for SSH
+declare API_CIDR="192.168.0.0/16"     # Allowed CIDR for the API
+declare NVME_DEVICE=""                # Explicit device, e.g. /dev/nvme0n1p2
+
 declare DRY_RUN="false"
 declare SKIP_DOCKER="false"
+declare FORCE_UNSUPPORTED="false"
+declare CURRENT_USER="${SUDO_USER:-$(logname)}"
 
 # ---------------------------  Parse args  ---------------------------
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --ssh-port)         SSH_PORT="${2:?missing value}"; shift 2 ;;
         --api-port)        API_PORT="${2:?missing value}"; shift 2 ;;
         --allow-ssh-from)  SSH_CIDR="${2:?missing value}"; shift 2 ;;
+        --allow-api-from)  API_CIDR="${2:?missing value}"; shift 2 ;;
+
+        --nvme-device)     NVME_DEVICE="${2:?missing value}"; shift 2 ;;
         --dry-run)         DRY_RUN="true"; shift ;;
         --no-docker)       SKIP_DOCKER="true"; shift ;;
+        --force-unsupported) FORCE_UNSUPPORTED="true"; shift ;;
         -h|--help)
-            cat <<'EOF'
+            cat <<EOF
 Usage: $PROG_NAME [options]
 
-  --api-port <port>          Port to open for the API (default: 8000)
+    --ssh-port <port>          SSH port (default: 2222)
+    --api-port <port>          Port to open for the API (default: 8000)
   --allow-ssh-from <cidr>    CIDR range allowed to SSH (default: 192.168.0.0/16)
+    --allow-api-from <cidr>    CIDR range allowed to access the API
+#    --admin-user option removed – script uses invoking user
+    --nvme-device <device>     Existing filesystem device to mount at /mnt/nvme
   --dry-run                  Show actions without executing them
   --no-docker                Skip Docker installation
+    --force-unsupported        Continue on non-Raspberry Pi 4 / non-Trixie systems
   -h, --help                 Show this help
 EOF
             exit 0
@@ -83,10 +402,25 @@ EOF
     esac
 done
 
+validate_port "$SSH_PORT"
+validate_port "$API_PORT"
+validate_cidr "$SSH_CIDR"
+validate_cidr "$API_CIDR"
+[[ -n "$CURRENT_USER" && "$CURRENT_USER" != "root" ]] || die "Invalid invoking user: $CURRENT_USER"
+
 # ---------------------------  Root check  ---------------------------
 if [[ $EUID -ne 0 ]]; then
     error "Run the script as root (e.g. sudo $PROG_NAME)"
     exit 1
+fi
+
+require_command awk
+require_command grep
+require_command mount
+require_command sed
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    log "Dry-run mode: no system changes will be made."
 fi
 
 # Ensure the root filesystem is mounted read‑write (required for config changes)
@@ -96,126 +430,101 @@ if ! mount | grep ' / ' | grep -q '\brw\b'; then
 fi
 
 # Back up fstab before any modification (use timestamped backup)
-cp -a /etc/fstab "/etc/fstab.bak.$(date +%s)"
+run cp -a /etc/fstab "/etc/fstab.bak.$(date +%s)"
 # ---------------------------  Environment validation ----------------------------
 # Ensure we are running on Raspberry Pi 4 with Debian trixie
 PI_MODEL=$(awk -F: '/^Model/ {print $2}' /proc/cpuinfo | xargs)
 if [[ "$PI_MODEL" != *"Raspberry Pi 4"* ]]; then
-    log "Warning: Detected model '$PI_MODEL' – script is intended for Raspberry Pi 4."
+    [[ "$FORCE_UNSUPPORTED" == "true" ]] || die "Detected model '$PI_MODEL'; use --force-unsupported to override"
+    log "Warning: continuing on unsupported model '$PI_MODEL'."
 fi
 OS_CODENAME=$(grep '^VERSION_CODENAME=' /etc/os-release | cut -d= -f2)
 if [[ "$OS_CODENAME" != "trixie" ]]; then
-    log "Warning: Detected OS codename '$OS_CODENAME' – script is intended for Debian trixie."
+    [[ "$FORCE_UNSUPPORTED" == "true" ]] || die "Detected OS '$OS_CODENAME'; use --force-unsupported to override"
+    log "Warning: continuing on unsupported OS '$OS_CODENAME'."
 fi
 # Set distribution identifiers for unattended-upgrades configuration
 DISTRIB_ID=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
 DISTRIB_CODENAME=$(grep '^VERSION_CODENAME=' /etc/os-release | cut -d= -f2 | tr -d '"')
-# Export variables expected by the sed replacement later
-export distro_id="$DISTRIB_ID"
-export distro_codename="$DISTRIB_CODENAME"
-
-
-
-run apt-get update -y
-# Install prerequisite packages required by the project
-
-# Install prerequisite packages required by the project
-run apt-get install -y wpasupplicant netplan.io
-
-run apt-get install -y git
-run apt-get install -y python3 python3-pip
-run apt-get install -y openssl
-run apt-get install -y iptables-persistent
-run apt-get install -y htop lm-sensors
-run apt-get install -y postfix
+export DEBIAN_FRONTEND=noninteractive
+run apt-get update
+run apt-get install -y --no-install-recommends \
+    wpasupplicant netplan.io git python3 python3-pip openssl \
+    iptables-persistent htop lm-sensors curl ca-certificates \
+    openssh-server ufw fail2ban unattended-upgrades jq gawk
 
 # ---------------------------  SSH hardening  ----------------------
-sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.$(date +%Y%m%d%H%M%S)
-
 SSHD_CONF="/etc/ssh/sshd_config"
+run cp -a "$SSHD_CONF" "$SSHD_CONF.bak.$(date +%Y%m%d%H%M%S)"
 
-# 2. Remove existing directives (active or commented) to avoid duplicates/conflicts
-sudo sed -i -E '/^[#[:space:]]*Port[[:space:]]+/Id' /etc/ssh/sshd_config
-sudo sed -i -E '/^[#[:space:]]*PermitRootLogin[[:space:]]+/Id' /etc/ssh/sshd_config
-sudo sed -i -E '/^[#[:space:]]*PasswordAuthentication[[:space:]]+/Id' /etc/ssh/sshd_config
-sudo sed -i -E '/^[#[:space:]]*PubkeyAuthentication[[:space:]]+/Id' /etc/ssh/sshd_config
-sudo sed -i -E '/^[#[:space:]]*AllowUsers[[:space:]]+/Id' /etc/ssh/sshd_config
+# Ensure the invoking user has an authorized SSH key
+if [[ ! -s "/home/$CURRENT_USER/.ssh/authorized_keys" ]]; then
+    die "No authorized SSH key found for $CURRENT_USER; aborting"
+fi
+run usermod -aG sudo "$CURRENT_USER"
 
-# 3. Append the desired settings
-sudo bash -c 'cat >> /etc/ssh/sshd_config <<EOF
-Port 2222
-PermitRootLogin no
-PasswordAuthentication no
-PubkeyAuthentication yes
-AllowUsers sysadmin
-EOF'
-
-# 4. Check for conflicting Port/other directives in drop-in files
-sudo grep -rn "^[[:space:]]*\(Port\|PermitRootLogin\|PasswordAuthentication\|AllowUsers\)" /etc/ssh/sshd_config.d/ 2>/dev/null
-
-# 5. Validate syntax
-sudo sshd -t && echo "Syntax OK"
-
-# ----------------------------------------------------------------------
-# Create a non‑root admin user that reuses the existing SSH public key
-# ----------------------------------------------------------------------
-# Define the name of the admin user (adjust if you prefer a different name)
-NEW_ADMIN_USER="sysadmin"
-# Create the user if it does not already exist (no password, no interactive prompt)
-if ! id -u "$NEW_ADMIN_USER" >/dev/null 2>&1; then
-    run adduser --disabled-password --gecos "" "$NEW_ADMIN_USER"
-    # Copy the authorized_keys from the existing 'pi' account (the boot account)
-    if [ -f "/home/pi/.ssh/authorized_keys" ]; then
-        run mkdir -p "/home/$NEW_ADMIN_USER/.ssh"
-        run cp "/home/pi/.ssh/authorized_keys" "/home/$NEW_ADMIN_USER/.ssh/"
-        run chown -R "$NEW_ADMIN_USER:$NEW_ADMIN_USER" "/home/$NEW_ADMIN_USER/.ssh"
-        run chmod 700 "/home/$NEW_ADMIN_USER/.ssh"
-        run chmod 600 "/home/$NEW_ADMIN_USER/.ssh/authorized_keys"
-    fi
-    # Grant sudo privileges (allows admin actions without full root login)
-    run usermod -aG sudo "$NEW_ADMIN_USER"
-    # Also add the new admin to the docker group (so it can manage containers)
-    # Deferred addition to docker group until Docker is installed (handled later)
+# Remove managed directives from the main file, then append one authoritative block.
+run sed -i -E '/^[#[:space:]]*Port[[:space:]]+/Id' "$SSHD_CONF"
+run sed -i -E '/^[#[:space:]]*PermitRootLogin[[:space:]]+/Id' "$SSHD_CONF"
+run sed -i -E '/^[#[:space:]]*PasswordAuthentication[[:space:]]+/Id' "$SSHD_CONF"
+run sed -i -E '/^[#[:space:]]*PubkeyAuthentication[[:space:]]+/Id' "$SSHD_CONF"
+run sed -i -E '/^[#[:space:]]*AllowUsers[[:space:]]+/Id' "$SSHD_CONF"
+if [[ "$DRY_RUN" == "true" ]]; then
+    log "[DRY-RUN] append SSH settings to $SSHD_CONF"
+else
+    printf '\n# Managed by %s\nPort %s\nPermitRootLogin no\nPasswordAuthentication no\nPubkeyAuthentication yes\nAllowUsers %s\n' \
+        "$PROG_NAME" "$SSH_PORT" "$CURRENT_USER" >>"$SSHD_CONF"
+fi
+# Recommendation: After reloading sshd, verify you can still connect (e.g., nc -z localhost $SSH_PORT) before ending your session.
+if systemctl list-unit-files ssh.service >/dev/null 2>&1; then
+    run systemctl reload ssh
+else
+    run systemctl reload sshd
 fi
 
 # ---------------------------  Firewall (ufw)  --------------------
 run apt-get install -y ufw
 run ufw default deny incoming
 run ufw default allow outgoing
-run ufw allow from "$SSH_CIDR" to any port $SSH_PORT proto tcp
-run ufw allow "${API_PORT}/tcp"
-if ufw status | grep -q inactive; then
+run ufw allow from "$SSH_CIDR" to any port "$SSH_PORT" proto tcp
+run ufw allow from "$API_CIDR" to any port "$API_PORT" proto tcp
+# Recommendation: Test the firewall rule (e.g., nc -z <host> $SSH_PORT) to confirm the SSH port is reachable.
+if ufw status | grep -q '^Status: inactive'; then
     run ufw --force enable
 fi
 
 # ---------------------------  Fail2Ban (SSH jail)  -----------------
-run apt-get install -y fail2ban
-cat >/etc/fail2ban/jail.d/ssh.conf <<'EOF'
-[sshd]
-enabled = true
-port    = ssh
-logpath = %(sshd_log)s
-maxretry = 5
-bantime = 3600
-EOF
+if [[ "$DRY_RUN" == "true" ]]; then
+    log "[DRY-RUN] write /etc/fail2ban/jail.d/ssh.conf for port $SSH_PORT"
+else
+    printf '%s\n' \
+'[sshd]' \
+'enabled = true' \
+"port = $SSH_PORT" \
+'logpath = %(sshd_log)s' \
+'maxretry = 5' \
+'bantime = 3600' \
+        >/etc/fail2ban/jail.d/ssh.conf
+fi
 run systemctl restart fail2ban
 
 # ---------------------------  Unattended upgrades  -----------------
-run apt-get install -y unattended-upgrades
-# Enable security-only upgrades (Bullseye/Bookworm)
-sed -i "s|//\"${distro_id}:${distro_codename}-security\";|\"${distro_id}:${distro_codename}-security\";|g" \
-    /etc/apt/apt.conf.d/50unattended-upgrades
+if [[ "$DRY_RUN" == "true" ]]; then
+    log "[DRY-RUN] configure unattended security upgrades for $DISTRIB_ID:$DISTRIB_CODENAME"
+else
+    cat >/etc/apt/apt.conf.d/52-hardening-unattended-upgrades <<EOF
+Unattended-Upgrade::Allowed-Origins {
+    "${DISTRIB_ID}:${DISTRIB_CODENAME}-security";
+};
+EOF
+    apt-get -o DPkg::Options::=--force-confold -s upgrade >/dev/null
+fi
 run systemctl enable --now unattended-upgrades
 
 # ---------------------------  Disable unneeded services ----------
-DISABLE_SERVICES=(
-    avahi-daemon
-    bluetooth
-    triggerhappy
-)
+DISABLE_SERVICES=(avahi-daemon bluetooth triggerhappy)
 for svc in "${DISABLE_SERVICES[@]}"; do
-    if systemctl is-enabled "$svc" >/dev/null 2>&1; then
-        log "Disabling $svc"
+    if systemctl is-active --quiet "$svc" || systemctl is-enabled --quiet "$svc"; then
         run systemctl disable --now "$svc"
     fi
 done
@@ -224,80 +533,98 @@ done
 run systemctl enable --now systemd-timesyncd
 
 # ---------------------------  NVMe mount & TRIM  -----------------
-NVME_DEVICE=$(lsblk -o NAME,TYPE -dn | grep -E '^nvme' | head -n1 || true)
+if [[ -z "$NVME_DEVICE" ]]; then
+    NVME_DEVICE=$(lsblk -pnro PATH,TYPE | awk '$2 == "part" && $1 ~ /nvme/ {print $1; exit}')
+fi
 if [[ -n "$NVME_DEVICE" ]]; then
+    [[ -b "$NVME_DEVICE" ]] || die "NVMe device is not a block device: $NVME_DEVICE"
+    ROOT_SOURCE=$(findmnt -nro SOURCE /)
+    [[ "$NVME_DEVICE" != "$ROOT_SOURCE" ]] || die "Refusing to mount the root device as NVMe data storage"
     MOUNTPOINT="/mnt/nvme"
-    # Use UUID for a stable fstab entry (prevents breakage if device name changes)
-    UUID=$(blkid -s UUID -o value "/dev/$NVME_DEVICE" 2>/dev/null || true)
-    if [[ -n "$UUID" ]]; then
-        FSTAB_LINE="UUID=$UUID  $MOUNTPOINT  ext4  defaults,noatime  0  2"
-    else
-        FSTAB_LINE="/dev/$NVME_DEVICE  $MOUNTPOINT  ext4  defaults,noatime  0  2"
-    fi
-    if ! grep -qs "$MOUNTPOINT" /proc/mounts; then
-        if ! grep -q "$MOUNTPOINT" /etc/fstab; then
-            echo "$FSTAB_LINE" >>/etc/fstab
+    FILESYSTEM=$(blkid -s TYPE -o value "$NVME_DEVICE" 2>/dev/null || true)
+    [[ "$FILESYSTEM" == "ext4" ]] || die "$NVME_DEVICE is not an existing ext4 filesystem"
+    UUID=$(blkid -s UUID -o value "$NVME_DEVICE")
+    FSTAB_LINE="UUID=$UUID  $MOUNTPOINT  ext4  defaults,noatime  0  2"
+    if ! grep -qs "[[:space:]]${MOUNTPOINT}[[:space:]]" /proc/mounts; then
+        if ! grep -qF "UUID=$UUID" /etc/fstab; then
+            if [[ "$DRY_RUN" == "true" ]]; then
+                log "[DRY-RUN] append $FSTAB_LINE to /etc/fstab"
+            else
+                printf '%s\n' "$FSTAB_LINE" >>/etc/fstab
+
         fi
         run mkdir -p "$MOUNTPOINT"
         run mount "$MOUNTPOINT"
     fi
+    if [[ "$DRY_RUN" != "true" ]]; then
+        mount -a --fake
+    fi
     run systemctl enable --now fstrim.timer
 else
-    log "NVMe device not detected – skipping mount / TRIM steps"
+    log "NVMe device not detected; skipping mount and TRIM steps"
 fi
 
 # ---------------------------  Docker (optional)  -----------------
 if [[ "$SKIP_DOCKER" != "true" ]]; then
-    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-    run sh /tmp/get-docker.sh
-    # Add the default pi (or sysadmin) user to the docker group – now that Docker is installed
-    run usermod -aG docker $NEW_ADMIN_USER
-    # Install Docker Compose v2 plugin (Debian/Ubuntu package)
-    run apt-get install -y docker-compose-plugin
-    # Configure Docker daemon JSON-file logging limits (merge with existing if present)
-    DOCKER_DAEMON_CONF="/etc/docker/daemon.json"
-    if [[ -f "$DOCKER_DAEMON_CONF" ]]; then
-        # Use jq (install if missing) to merge new logging options
-        if ! command -v jq >/dev/null 2>&1; then
-            run apt-get install -y jq
-        fi
-        jq '. + {"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}' "$DOCKER_DAEMON_CONF" >"$DOCKER_DAEMON_CONF.tmp" && mv "$DOCKER_DAEMON_CONF.tmp" "$DOCKER_DAEMON_CONF"
-    else
-        cat >"$DOCKER_DAEMON_CONF" <<'EOF2'
-{
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  }
-}
-EOF2
+    if ! command -v docker >/dev/null 2>&1; then
+        run curl --fail --silent --show-error --location https://get.docker.com --output /tmp/get-docker.sh
+        run sh /tmp/get-docker.sh
+        run rm -f /tmp/get-docker.sh
     fi
+    run usermod -aG docker "$CURRENT_USER"
+    DOCKER_DAEMON_CONF="/etc/docker/daemon.json"
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "[DRY-RUN] configure Docker log limits in $DOCKER_DAEMON_CONF"
+    elif [[ -f "$DOCKER_DAEMON_CONF" ]]; then
+        jq '. + {"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}' \
+            "$DOCKER_DAEMON_CONF" >"$DOCKER_DAEMON_CONF.tmp"
+        mv "$DOCKER_DAEMON_CONF.tmp" "$DOCKER_DAEMON_CONF"
+    else
+        install -d -m 755 /etc/docker
+        printf '%s\n' '{' \
+'  "log-driver": "json-file",' \
+'  "log-opts": {' \
+'    "max-size": "10m",' \
+'    "max-file": "3"' \
+'  }' \
+'}' >"$DOCKER_DAEMON_CONF"
+    fi
+    if [[ "$DRY_RUN" != "true" ]]; then
+        dockerd --validate --config-file="$DOCKER_DAEMON_CONF"
+    fi
+    run systemctl enable --now docker
     run systemctl restart docker
 else
-    log "--no-docker flag set – Docker installation skipped"
+    log "--no-docker flag set; Docker installation skipped"
 fi
 
 # ---------------------------  Secrets file perms  -----------------
-if [[ -f /home/pi/.env ]]; then
-    run chmod 600 /home/pi/.env
-fi
+for env_file in "/home/pi/.env" "/home/$CURRENT_USER/.env"; do
+    if [[ -f "$env_file" ]]; then
+        run chmod 600 "$env_file"
+    fi
+done
 
-# ---------------------------  Hardware health cron  -------------
-cat >/etc/cron.d/pi-health <<'EOF'
+    log "[DRY-RUN] write /etc/cron.d/pi-health"
+else
+    cat >/etc/cron.d/pi-health <<'EOF'
 # Daily hardware-health logging – 02:30
 30 2 * * * root /usr/bin/vcgencmd get_throttled >> /var/log/pi-health.log 2>&1
 30 2 * * * root /usr/bin/vcgencmd measure_temp   >> /var/log/pi-health.log 2>&1
 EOF
+    chmod 644 /etc/cron.d/pi-health
+    touch /var/log/pi-health.log
+    chmod 640 /var/log/pi-health.log
+fi
 
 # ---------------------------  Summary verification  -------------
 log "=== Verification Summary ==="
 run ufw status verbose
 if command -v docker >/dev/null 2>&1; then
-    run docker info | grep -E 'Storage Driver|Logging Driver'
+    run docker info
 fi
-run systemctl status fail2ban | head -n 10
-run grep -E 'PasswordAuthentication|PermitRootLogin' /etc/ssh/sshd_config
+run systemctl is-active fail2ban
+run grep -E '^(Port|PasswordAuthentication|PermitRootLogin|PubkeyAuthentication|AllowUsers) ' "$SSHD_CONF"
 log "\n=== Execution Summary ==="
 log "Successful commands: $SUCCESS_COUNT"
 log "Failed commands: $FAILURE_COUNT"
@@ -307,4 +634,4 @@ if (( FAILURE_COUNT > 0 )); then
         log "  - $cmd"
     done
 fi
-log "Hardening script completed."
+log "Hardening script completed successfully."
