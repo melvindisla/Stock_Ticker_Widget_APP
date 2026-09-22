@@ -37,6 +37,7 @@ flowchart LR
     - [✅] Install active fan cooling or high‑mass aluminum heatsink case (target <65°C under load via `vcgencmd measure_temp`).
     - [ ] Create PostgreSQL storage directory on NVMe mount.
     - [ ] Connect via wifi and configure static DHCP reservation on home router.
+    - [ ] Make sure that after you build the driver for the wifi adpater, make sure that the driver boots (as a service, i dont know what exactly) whenever the pi is turned off
     - [ ] Configure initial local database backup script (`pg_dump` compressed to `/mnt/nvme/backups/`).
 - [ ] **Containerized Backend (`docker-compose.yml`):**
   - [ ] `api` service: FastAPI + Uvicorn server.
