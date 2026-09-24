@@ -14,6 +14,7 @@ scripts/
 dist/
 downloads/
 eggs/
+offline_docs/
 .eggs/
 lib/
 lib64/
