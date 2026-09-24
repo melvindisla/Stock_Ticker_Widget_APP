@@ -25,22 +25,51 @@ flowchart LR
 
 - [ ] **Raspberry Pi Hardware & Host OS Hardening:**
 - **Technology Stack (Phase 1 – MVP):** FastAPI, Pydantic, httpx, asyncio, Redis‑py, SQLAlchemy, Docker, Docker‑Compose.
+  - **Storage Architecture:** Raspberry Pi 4 boots **directly from NVMe SSD over USB 3.0** (EEPROM `BOOT_ORDER=0xf41`). **No microSD card is used.** The NVMe drive hosts the OS root filesystem, Docker runtime (`/var/lib/docker`), and PostgreSQL persistent data — all on a single drive.
   - **Automated by `scripts/hardening.sh`:**
     - [✅] Verify NTP time synchronization (`systemd-timesyncd`).
-    - [✅] Mount NVMe drive permanently at `/mnt/nvme` via `/etc/fstab`; enable weekly TRIM (`fstrim.timer`).
+    - [✅] Verify NVMe is the boot device (root fs on `/dev/nvme0n1p2`); enable weekly TRIM (`fstrim.timer`).
     - [✅] Verify NVMe UASP and TRIM support (`lsblk --discard`).
     - [✅] Configure host firewall (`ufw allow 22`, `ufw allow 8000` from LAN CIDR) and enforce SSH key authentication (`PasswordAuthentication no`).
     - [✅] Set strict `.env` file permissions on host (`chmod 600 .env`).
   - **Manual steps:**
-    - [✅] Flash Raspberry Pi OS directly to NVMe SSD; update EEPROM bootloader to direct USB3 boot (`BOOT_ORDER=0xf41`) and remove microSD card entirely.
+    - [✅] Flash Raspberry Pi OS directly to NVMe SSD using Pi Imager; update EEPROM bootloader to direct USB3 boot (`BOOT_ORDER=0xf41`); **remove microSD card entirely**.
     - [✅] Verify official 15.3W USB-C power supply (run `vcgencmd get_throttled` to confirm `0x0` / no under-voltage).
     - [✅] Install active fan cooling or high‑mass aluminum heatsink case (target <65°C under load via `vcgencmd measure_temp`).
-    - [ ] Create PostgreSQL storage directory on NVMe mount.
-    - [ ] Connect via wifi and configure static DHCP reservation on home router.
-    - [ ] Make sure that after you build the driver for the wifi adpater, make sure that the driver boots (as a service, i dont know what exactly) whenever the pi is turned off
+    - [ ] Connect via Wi‑Fi and configure static DHCP reservation on home router.
+    - [ ] Ensure Wi‑Fi driver (RTL8821CU) loads as a service on boot via systemd.
     - [ ] Configure initial local database backup script (`pg_dump` compressed to `/mnt/nvme/backups/`).
-- [ ] **Containerized Backend (`docker-compose.yml`):**
-  - [ ] `api` service: FastAPI + Uvicorn server.
+- [ ] **Containerized Backend (API Development):**
+  - [ ] **Project Layout:**
+    - [ ] Create `App/` directory structure (`app/`, `Dockerfile`, `docker-compose.yml`, `.env.example`)
+    - [ ] Set up `app/main.py` (FastAPI entry point with lifespan)
+    - [ ] Configure `app/config.py` for environment variables
+    - [ ] Implement `app/deps/auth.py` (API key dependency)
+    - [ ] Build `app/clients/provider.py` (Finnhub HTTPX adapter)
+    - [ ] Create `app/clients/cache.py` (Redis + in-process cache)
+    - [ ] Design `app/clients/db.py` (SQLAlchemy + Alembic)
+    - [ ] Define `app/models/` (Pydantic schemas: Ticker, History, Alert)
+    - [ ] Implement `app/routers/ticker.py` (`/ticker/{symbol}`, `/alerts` endpoints)
+    - [ ] Add `app/background/tasks.py` (cache sweeper, background jobs)
+  - [ ] **Docker Configuration:**
+    - [ ] Write multi-stage `Dockerfile` (Python 3.12 slim)
+    - [ ] Configure `docker-compose.yml` (api, redis, postgres services)
+    - [ ] Set bind-mounts for PostgreSQL data on NVMe
+    - [ ] Add healthchecks for all services
+    - [ ] Set `restart: unless-stopped` and proper resource limits
+  - [ ] **API Implementation:**
+    - [ ] Implement lifespan manager (startup/shutdown clients)
+    - [ ] Create `GET /ticker/{symbol}` route (cache → Redis → provider → background history)
+    - [ ] Create `GET /alerts` route (read PostgreSQL news alerts)
+    - [ ] Add API key authentication dependency to all routes
+    - [ ] Implement background tasks (cache sweeper, history persistence)
+    - [ ] Add structured logging and correlation IDs
+    - [ ] Implement `/health` endpoint (Redis, Postgres, NVMe checks)
+  - [ ] **Testing & Quality:**
+    - [ ] Write unit tests (respx mocks, fakeredis, TestClient)
+    - [ ] Create integration tests (testcontainers: Redis + Postgres)
+    - [ ] Set up CI pipeline (ruff, mypy, pytest)
+    - [ ] Document Alembic migration workflow
   - [ ] `redis` service: `redis:alpine` in-memory cache.
   - [ ] `postgres` service: `postgres:alpine` with data directory bind-mounted to NVMe.
 - [ ] **Market Data & Caching Logic:**
@@ -134,7 +163,8 @@ flowchart LR
   - [ ] Docker log driver caps (`max-size="10m"`, `max-file="3"`).
   - [ ] CloudWatch Alarm on SQS `ApproximateAgeOfOldestMessage` (>15 mins).
 - [ ] **Automated Backups & Disaster Recovery:**
-  - [ ] Daily cron job running `pg_dump` of NVMe Postgres database with automated sync to off-host secondary storage (secondary drive or S3).
+  - [ ] Daily cron job running `pg_dump` of NVMe Postgres database to `/mnt/nvme/backups/` (on the same NVMe drive).
+  - [ ] Manual/optional: periodic sync of `/mnt/nvme/backups/` to off-host storage (USB drive or S3) for true disaster recovery.
   - [ ] Document and test 10-minute rapid rebuild disaster recovery procedure from git repo, `.env`, and database backup.
 - [ ] **Testing & Quality Assurance:**
   - [ ] Automated CI gate: Require 100% pass rate on unit & integration test suites before merge to `main`.

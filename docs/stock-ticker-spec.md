@@ -6,7 +6,7 @@ See the [Roadmap](ROADMAP.md) for a high‑level phase overview.
 
 ## Decisions & Requirements
 
-- **Boot medium:** Direct USB‑3 boot from NVMe SSD (EEPROM set to `BOOT_ORDER=0xf41`). No micro‑SD card required.
+- **Boot medium:** Direct USB‑3 boot from NVMe SSD (EEPROM set to `BOOT_ORDER=0xf41`). **No micro‑SD card is used.** The NVMe drive is the sole storage device — it hosts the OS root filesystem, Docker runtime (`/var/lib/docker`), and all persistent data (PostgreSQL). There is no secondary drive.
 - **Network:** Wi‑Fi only, configured via `wpa_supplicant`. No Ethernet.
 - **Bootstrapping:** Use Raspberry Pi Imager to write the OS image, then run `scripts/hardening.sh` to apply all hardening and configuration steps.
 - **Secrets handling:** Runtime secrets (API keys, DB credentials, etc.) are provisioned manually (or via a secure out‑of‑band process) and stored in a `.env` file with strict `600` permissions after the hardening script runs.
@@ -14,7 +14,7 @@ See the [Roadmap](ROADMAP.md) for a high‑level phase overview.
 
 ## 1. Overview
 
-A system that serves near-real-time stock ticker data to a standalone desktop widget, backed by a containerized, self-hosted API running on a Raspberry Pi 4, with a persistent database stored on an NVMe drive. A narrow, event-driven AWS slice (AWS Lambda + SQS) supplements this: when a ticker moves by more than a configured threshold, a AWS Lambda function uses LangChain against a Google News backend to source and summarize relevant news for that symbol, which is ingested by the Pi and served via its API directly to the desktop widget UI. Primary constraint: **no ongoing cloud cost for the core backend**; the AWS Lambda/SQS/LLM slice is deliberately narrow and its costs are called out explicitly rather than assumed to be $0.
+A system that serves near-real-time stock ticker data to a standalone desktop widget, backed by a containerized, self-hosted API running on a Raspberry Pi 4, with a persistent database stored on an NVMe drive. **The Raspberry Pi 4 boots directly from the NVMe SSD over USB 3.0 — there is no microSD card. The NVMe drive is the single storage device, hosting the OS root filesystem, Docker runtime, and all persistent data (PostgreSQL).** A narrow, event-driven AWS slice (AWS Lambda + SQS) supplements this: when a ticker moves by more than a configured threshold, a AWS Lambda function uses LangChain against a Google News backend to source and summarize relevant news for that symbol, which is ingested by the Pi and served via its API directly to the desktop widget UI. Primary constraint: **no ongoing cloud cost for the core backend**; the AWS Lambda/SQS/LLM slice is deliberately narrow and its costs are called out explicitly rather than assumed to be $0.
 
 ## 2. Goals / Non-Goals
 
@@ -274,16 +274,17 @@ Every arrow crossing the Pi/AWS boundary originates from the Pi — AWS Lambda n
 
 **NVMe storage for the database — the concrete requirement behind "save the database on the NVMe drive":**
 
-- Mount the NVMe drive at a fixed path on the Pi's filesystem (e.g. `/mnt/nvme`), and bind-mount a subdirectory of it into the `postgres` container as its data directory, rather than using a plain Docker named volume (which would default onto the Pi's boot SD card unless explicitly redirected). This is the actual mechanism that gets the database's bytes physically onto the NVMe drive rather than just conceptually "using" it.
-- Benefit beyond raw speed: keeping database I/O off the boot SD card materially reduces SD card wear, which matters for a Pi's typical long-term reliability — the original project note about being on a 32GB SD card, plus an NVMe addition specifically for the database, suggests this reliability concern is already part of the thinking here.
-- Set the NVMe mount to persist across reboots via the Pi's `/etc/fstab`, not just mounted ad hoc — otherwise a reboot could bring the Pi up with the database directory missing, which Postgres would treat as "first run" rather than "here's your existing data."
+- The Raspberry Pi 4 **boots directly from the NVMe SSD over USB 3.0** (EEPROM `BOOT_ORDER=0xf41`). There is **no microSD card**. The NVMe is the single storage device — it holds the OS root filesystem, Docker's storage driver (`/var/lib/docker`), and all container data.
+- Bind-mount a subdirectory of the NVMe (e.g. `/mnt/nvme/postgres`) into the `postgres` container as its data directory, rather than using a plain Docker named volume (which would default to `/var/lib/docker/volumes/...` on the same NVMe anyway, but bind-mounting makes the path explicit and inspectable). This is the actual mechanism that gets the database's bytes onto the NVMe drive.
+- Set the NVMe mount to persist across reboots via the Pi's `/etc/fstab` — the root filesystem is already on NVMe, so this is mainly for the explicit data subdirectory path consistency.
+- Benefit: keeping database I/O on enterprise-grade NVMe NAND (not an SD card) materially improves reliability and throughput (~350+ MB/s vs ~30 MB/s).
 
 **Cross-cutting container practices:**
 
 - `restart: unless-stopped` on every service — the Pi-native equivalent of AWS Lambda automatically retrying; if a container crashes or the Pi reboots, Docker brings everything back without manual intervention.
 - Docker `healthcheck` directives on `api` and `postgres` — lets Docker (and `docker compose ps`) report real health status, and lets `restart: unless-stopped` actually detect and recover a hung-but-not-crashed container, not just a fully dead one.
 - `.env` file (git-ignored) for secrets (API key, DB credentials) referenced by the Compose file via `env_file:` — never baked into the images themselves.
-- Docker's log driver configured with explicit `max-size`/`max-file` limits (§12's logging note) so container logs don't silently fill the SD card/NVMe over months of uptime.
+- Docker's log driver configured with explicit `max-size`/`max-file` limits (§12's logging note) so container logs don't silently fill the NVMe over months of uptime.
 
 ### 4.7 Persistent Database & ORM (Phase 1 – MVP)
 
@@ -395,10 +396,15 @@ This is inherently platform-specific (there's no cross-platform API for "run thi
 - Under sustained Docker container loads and database maintenance, an uncooled Pi 4 quickly exceeds 80°C, triggering thermal throttling down to 1.0 GHz or 750 MHz.
 - **Requirement:** Active fan cooling or a high-mass passive aluminum heatsink case (e.g. Argon ONE, FLIRC, or an Ice Tower) maintaining CPU thermals below 65°C under load (`vcgencmd measure_temp`).
 
-#### 3. Storage Architecture: Ditching the SD Card (Direct NVMe Boot)
+#### 3. Storage Architecture: Single NVMe Drive (Boot + OS + Data)
 
 - **Problem:** MicroSD cards degrade rapidly under continuous Docker container layer churn, swap operations, and system logging, leading to silent filesystem corruption.
-- **Architecture Decision:** Update the Pi 4 EEPROM bootloader to **boot directly from the NVMe SSD over USB3** (`BOOT_ORDER=0xf41`). Remove the microSD card entirely.
+- **Architecture Decision:** Update the Pi 4 EEPROM bootloader to **boot directly from the NVMe SSD over USB3** (`BOOT_ORDER=0xf41`). **Remove the microSD card entirely.** The NVMe is the **sole storage device** — it hosts:
+  - The OS root filesystem (`/`)
+  - Docker runtime and all container layers (`/var/lib/docker`)
+  - PostgreSQL persistent data (via bind-mount at `/mnt/nvme/postgres`)
+  - Local database backups (`/mnt/nvme/backups/`)
+  There is **no secondary drive**.
   - Increases disk I/O throughput from ~30 MB/s (Class 10 SD) to ~350+ MB/s (USB 3.0 UASP NVMe).
   - Hosts both the root OS filesystem and the Docker storage driver (`/var/lib/docker`) on enterprise-grade NAND flash.
 - **SSD Health & TRIM:** Verify USB adapter supports UASP and TRIM (`lsblk --discard`). Enable a weekly cron job (`sudo fstrim -av`) to prevent write performance degradation over time.
@@ -424,14 +430,14 @@ This is inherently platform-specific (there's no cross-platform API for "run thi
 
 #### 7. Disaster Recovery & Rapid Rebuild Plan
 
-- **Database Dump Cron:** A daily cron job executes a compressed dump of the Postgres historical database:
+- **Database Dump Cron:** A daily cron job executes a compressed dump of the Postgres historical database to the NVMe backup directory (on the same drive):
 
   ```bash
   docker exec stock-postgres pg_dump -U stockuser stockdata | gzip > /mnt/nvme/backups/db_$(date +%F).sql.gz
   ```
 
-- **Off-Host Backup:** Periodically sync the backup directory to a secondary USB drive or an S3 bucket.
-- **10-Minute Rebuild:** Because the Compose file, Dockerfile, and Alembic migrations are version-controlled in Git, restoring to a replacement Pi requires only flashing a fresh Raspberry Pi OS image, cloning the repo, restoring `.env` and `db.sql.gz`, and running `docker compose up -d`.
+- **Off-Host Backup (manual/optional):** Periodically copy `/mnt/nvme/backups/` to a secondary USB drive or an S3 bucket for true off-site disaster recovery. The NVMe is the boot drive, so a drive failure would lose both OS and backups — off-host copy is the only protection against NVMe hardware failure.
+- **10-Minute Rebuild:** Because the Compose file, Dockerfile, and Alembic migrations are version-controlled in Git, restoring to a replacement Pi requires only flashing a fresh Raspberry Pi OS image **directly to a new NVMe SSD**, cloning the repo, restoring `.env` and `db.sql.gz`, and running `docker compose up -d`.
 
 ## 5. Data Model
 
@@ -515,7 +521,7 @@ timestamp: datetime
 - [ ] Every live fetch writes a corresponding record to Postgres, without delaying or failing the response if that write fails.
 - [ ] History records are queryable by symbol, ordered by timestamp, using the indexed columns (no full-table scan).
 - [ ] `docker compose up` from a clean checkout brings up all three services (api, redis, postgres) successfully.
-- [ ] The Postgres data directory is confirmed to live on the NVMe mount, not the boot SD card, after a fresh `docker compose up`.
+- [ ] The Postgres data directory is confirmed to live on the NVMe (bind-mounted at `/mnt/nvme/postgres`), not the default Docker volume path, after a fresh `docker compose up`.
 - [ ] Killing the `api` container causes Docker to restart it automatically within a reasonable interval, with no manual intervention.
 - [ ] A request without the correct API key header is rejected (401/403) before touching cache, provider, or database.
 - [ ] The API's port is confirmed unreachable from outside the home network (no router port-forward in place).
@@ -730,7 +736,7 @@ Given §4.4's LAN-only default, the **self-hosted runner on the Pi** is the bett
   }
   ```
 
-- **Log Rotation Limits:** Explicit `max-size` and `max-file` directives on Docker's `json-file` log driver prevent unbounded disk consumption on the NVMe/SD card:
+- **Log Rotation Limits:** Explicit `max-size` and `max-file` directives on Docker's `json-file` log driver prevent unbounded disk consumption on the NVMe:
 
   ```yaml
   logging:
@@ -887,9 +893,9 @@ flowchart LR
   - Deploy to Pi via self-hosted GitHub Actions runner running locally on the Pi (§10).
   - Automated Terraform plan and apply for the AWS slice using OIDC authentication (§10, §11).
 - **Observability & Health:**
-  - Docker log rotation caps (`max-size`/`max-file`) to protect NVMe/SD card storage (§12).
+  - Docker log rotation caps (`max-size`/`max-file`) to protect NVMe storage (§12).
   - CloudWatch alarm on SQS `ApproximateAgeOfOldestMessage` to detect prolonged Pi-side consumer outages (§12).
-- **Database Backups:** Automated cron job performing regular `pg_dump` of NVMe Postgres history to secondary storage.
+- **Database Backups:** Automated cron job performing regular `pg_dump` of NVMe Postgres history to `/mnt/nvme/backups/` (on the same NVMe); off-host copy to secondary USB/S3 is a separate manual/optional step for true disaster recovery.
 
 ### Phase 5: "All the Bells and Whistles" (v3.0+)
 >
